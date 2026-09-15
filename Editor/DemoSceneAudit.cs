@@ -37,7 +37,7 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// Things meant to have no collision: the sea is a surface to look at, and the
         /// shore pebbles are ankle-high litter that should not trip anyone.
         /// </summary>
-        private static readonly string[] Walkable = { "Sea", "Shore" };
+        private static readonly string[] Walkable = { "Sea", "Shore", "Darkness" };
 
         [MenuItem("Open MMORPG/Demo/Audit Scene Placement")]
         public static void Audit()
@@ -47,6 +47,7 @@ namespace MultiplayerARPG.Demo.EditorTools
 
             faults += AuditGroup(GameObject.Find("Village/Props"), report, true);
             faults += AuditGroup(GameObject.Find("BanditCamp"), report, true);
+            faults += AuditGroup(GameObject.Find("Crypt/Props"), report, true);
             faults += AuditGroup(GameObject.Find("Cliffs"), report, false);
             faults += AuditGroup(GameObject.Find("Village/Ground"), report, false);
             faults += AuditGroup(GameObject.Find("Nature/Rocks"), report, false);

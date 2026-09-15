@@ -81,12 +81,24 @@ namespace MultiplayerARPG.Demo.EditorTools
         public const float CampHeight = 7.5f;
 
         /// <summary>
+        /// The crypt's doorstep: a shelf cut into the hill the cultists keep to, so the
+        /// way down to their crypt stands among them. The hill is 15-17m here and the
+        /// shelf is set into it rather than on top, so the crypt front reads as dug into
+        /// the slope behind it. The radius is a house pad's and a little more: the front
+        /// is three cells wide, and the arrival point is two paces out from its door.
+        /// </summary>
+        public static readonly Vector2 CryptCentre = new Vector2(6f, -39f);
+        public const float CryptRadius = 11f;
+        public const float CryptHeight = 16f;
+
+        /// <summary>
         /// How far the bare, trodden ground reaches around each settlement. Ground people
         /// walk over daily is not pasture, so this area is earth rather than grass and
         /// nothing is scattered on it.
         /// </summary>
         public const float VillageGroundRadius = 21f;
         public const float CampGroundRadius = 13f;
+        public const float CryptGroundRadius = 7f;
 
         private const int NoiseSeed = 20260910;
 
@@ -148,6 +160,7 @@ namespace MultiplayerARPG.Demo.EditorTools
                     VillageCentre + new Vector2(house.x, house.z), HousePadRadius, VillageHeight);
             }
             height = Flatten(height, point, CampCentre, CampRadius, CampHeight);
+            height = Flatten(height, point, CryptCentre, CryptRadius, CryptHeight);
             return height;
         }
 
@@ -227,7 +240,9 @@ namespace MultiplayerARPG.Demo.EditorTools
         {
             return Mathf.Max(
                 SettlementWeightOne(x, z, VillageCentre, VillageGroundRadius),
-                SettlementWeightOne(x, z, CampCentre, CampGroundRadius));
+                Mathf.Max(
+                    SettlementWeightOne(x, z, CampCentre, CampGroundRadius),
+                    SettlementWeightOne(x, z, CryptCentre, CryptGroundRadius)));
         }
 
         private static float SettlementWeightOne(float x, float z, Vector2 centre, float radius)
@@ -254,6 +269,8 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// </summary>
         public const float VillageClearance = 22f;
         public const float CampClearance = 16f;
+        /// <summary>The crypt front's half-diagonal is 3.6m; this keeps rock off its walls and its doorstep.</summary>
+        public const float CryptClearance = 8f;
 
         /// <summary>
         /// Whether a point is on ground the settlements occupy.
@@ -270,7 +287,8 @@ namespace MultiplayerARPG.Demo.EditorTools
         {
             var point = new Vector2(x, z);
             return Vector2.Distance(point, VillageCentre) < VillageClearance ||
-                   Vector2.Distance(point, CampCentre) < CampClearance;
+                   Vector2.Distance(point, CampCentre) < CampClearance ||
+                   Vector2.Distance(point, CryptCentre) < CryptClearance;
         }
 
         /// <summary>

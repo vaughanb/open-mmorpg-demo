@@ -30,7 +30,10 @@ namespace MultiplayerARPG.Demo.EditorTools
             WriteMap(map);
             WriteClasses(map);
             WriteMonsters();
+            WriteSwimSpeed();
             WriteDatabase(database);
+            WireDungeon(map);
+            PreloadAudio();
 
             AssetDatabase.SaveAssets();
             Debug.Log($"[{nameof(DemoDatabaseWiring)}] Wired the demo database.");
@@ -185,6 +188,14 @@ namespace MultiplayerARPG.Demo.EditorTools
             public float AtkSpeed;
             public float VisualRange;
             public string[] Loot;
+            /// <summary>The chance of the first piece of loot; the rest fall away from it. Zero means the usual tenth.</summary>
+            public float LootRate;
+            /// <summary>Experience for a kill at level one, and how much more each level adds.</summary>
+            public float Exp;
+            public float ExpPerLevel;
+            /// <summary>Gold for a kill at level one, and how much more each level adds.</summary>
+            public float Gold;
+            public float GoldPerLevel;
         }
 
         /// <summary>
@@ -198,20 +209,83 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// </summary>
         private static readonly MonsterSpec[] Monsters =
         {
+            // Kills pay experience and gold, scaled so that the island's level bands each
+            // take a handful of kills: the kit's default table asks 20 points for level
+            // two and 295 for level ten, so a bandit at level one is worth a third of a
+            // level and a cultist at level eight a fifth of one. Left at the kit's zero,
+            // as they were until 2026-09-14, a character never levelled at all.
             new MonsterSpec { Name = "BaseEnemy", Title = "Bandit", Weapon = "BanditAxe",
                 Hp = 55f, HpPerLevel = 18f, MoveSpeed = 3.6f, AtkSpeed = 0.85f, VisualRange = 14f,
+                Exp = 9f, ExpPerLevel = 2.5f, Gold = 3f, GoldPerLevel = 0.8f,
                 Loot = new[] { "RangerBoots", "RangerBracers", "RangerPauldron", "RangerHood", "RangerBreeches", "RangerJerkin", "HuntingBow" } },
             new MonsterSpec { Name = "Marauder", Title = "Marauder", Weapon = "IronLongsword",
                 Hp = 95f, HpPerLevel = 26f, MoveSpeed = 3.2f, AtkSpeed = 0.7f, VisualRange = 15f,
+                Exp = 18f, ExpPerLevel = 4f, Gold = 7f, GoldPerLevel = 1.2f,
                 Loot = new[] { "KnightSabatons", "KnightGauntlets", "KnightPauldrons", "KnightHelm", "KnightGreaves", "KnightCuirass", "IronLongsword" } },
             new MonsterSpec { Name = "Cultist", Title = "Cultist", Weapon = "ApprenticeStaff",
                 Hp = 45f, HpPerLevel = 14f, MoveSpeed = 3.4f, AtkSpeed = 1.0f, VisualRange = 16f,
+                Exp = 16f, ExpPerLevel = 3.5f, Gold = 6f, GoldPerLevel = 1f,
                 Loot = new[] { "WizardShoes", "WizardSleeves", "WizardTrousers", "WizardRobe", "ElderStaff" } },
+            // The crypt's master. Five times a cultist's health at the same level and a
+            // faster staff, so at the level the crypt is pitched at - ten - the fight is
+            // long enough to be a fight but no more dangerous a hit than a cultist's; the
+            // danger is the guard that comes with him. He drops the mage's set at three
+            // times the rate, robe first, since he is the one wearing the good one.
+            new MonsterSpec { Name = "Hierophant", Title = "Hierophant", Weapon = "ElderStaff",
+                Hp = 240f, HpPerLevel = 45f, MoveSpeed = 3.6f, AtkSpeed = 1.15f, VisualRange = 18f,
+                Exp = 135f, ExpPerLevel = 15f, Gold = 55f, GoldPerLevel = 6f,
+                Loot = new[] { "WizardRobe", "ElderStaff", "WizardSleeves", "WizardTrousers", "WizardShoes" }, LootRate = 0.30f },
         };
+
+        /// <summary>
+        /// Health a monster gets back each second while it is being hit, once the rule's
+        /// percentage is cancelled out. The kit heals every character by a share of its
+        /// maximum health every second - a hundredth in the demo's rule - on top of the
+        /// `hpRecovery` stat, and it heals in a fight exactly as it does out of one. For
+        /// a character that is fine: it is how they get ready for the next fight. For a
+        /// monster with a big pool it is a wall: the Hierophant's 645 points came back
+        /// at seven and a half a second, which is a starter sword's whole output, and
+        /// the fight could not end. So each monster's `hpRecovery` is set to cancel the
+        /// share, base and per level, and leave this much.
+        /// </summary>
+        private const float MonsterRegenPerSecond = 0.5f;
+
+        /// <summary>
+        /// How fast a character swims, as a share of its run speed. The demo's rule asset
+        /// was left at a tenth (the kit's own default is a half), which made the sea feel
+        /// like treacle: four metres a second on the beach, forty centimetres in the water.
+        /// Most MMOs swim at about run speed; a little under reads as water.
+        /// </summary>
+        private const float SwimMoveSpeedRate = 0.8f;
+
+        private static void WriteSwimSpeed()
+        {
+            var rule = AssetDatabase.LoadAssetAtPath<ScriptableObject>($"{GameDataDir}/GameplayRule.asset");
+            if (rule == null)
+                return;
+            var serialized = new SerializedObject(rule);
+            SerializedProperty rate = serialized.FindProperty("moveSpeedRateWhileSwimming");
+            if (rate == null)
+                return;
+            rate.floatValue = SwimMoveSpeedRate;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            EditorUtility.SetDirty(rule);
+        }
+
+        /// <summary>The rule's percentage regen, read from the demo's rule so the cancel cannot drift from it.</summary>
+        private static float HpRecoveryRatePerSecond()
+        {
+            var rule = AssetDatabase.LoadAssetAtPath<ScriptableObject>($"{GameDataDir}/GameplayRule.asset");
+            if (rule == null)
+                return 0f;
+            SerializedProperty rate = new SerializedObject(rule).FindProperty("hpRecoveryRatePerSeconds");
+            return rate == null ? 0f : rate.floatValue;
+        }
 
         private static void WriteMonsters()
         {
             DemoItemBuilder.EnsureFolder($"{GameDataDir}/Resources/MonsterCharacters");
+            float regenRate = HpRecoveryRatePerSecond();
             foreach (MonsterSpec spec in Monsters)
             {
                 string path = $"{GameDataDir}/Resources/MonsterCharacters/{spec.Name}.asset";
@@ -228,15 +302,24 @@ namespace MultiplayerARPG.Demo.EditorTools
                 Stat(serialized, "stats.statsIncreaseEachLevel.hp", spec.HpPerLevel);
                 Stat(serialized, "stats.baseStats.moveSpeed", spec.MoveSpeed);
                 Stat(serialized, "stats.baseStats.atkSpeed", spec.AtkSpeed);
-                Stat(serialized, "stats.baseStats.hpRecovery", 1f);
+                Stat(serialized, "stats.baseStats.hpRecovery", MonsterRegenPerSecond - spec.Hp * regenRate);
+                Stat(serialized, "stats.statsIncreaseEachLevel.hpRecovery", -spec.HpPerLevel * regenRate);
                 Stat(serialized, "visualRange", spec.VisualRange);
+                Stat(serialized, "randomExp.baseAmount.min", Mathf.Round(spec.Exp * 0.9f));
+                Stat(serialized, "randomExp.baseAmount.max", Mathf.Round(spec.Exp * 1.1f));
+                Stat(serialized, "randomExp.amountIncreaseEachLevel.min", spec.ExpPerLevel);
+                Stat(serialized, "randomExp.amountIncreaseEachLevel.max", spec.ExpPerLevel);
+                Stat(serialized, "randomGold.baseAmount.min", Mathf.Round(spec.Gold * 0.7f));
+                Stat(serialized, "randomGold.baseAmount.max", Mathf.Round(spec.Gold * 1.3f));
+                Stat(serialized, "randomGold.amountIncreaseEachLevel.min", spec.GoldPerLevel);
+                Stat(serialized, "randomGold.amountIncreaseEachLevel.max", spec.GoldPerLevel);
                 SerializedProperty weapon = serialized.FindProperty("rightHandEquipItem");
                 if (weapon != null)
                     weapon.objectReferenceValue = Item(spec.Weapon);
                 serialized.ApplyModifiedPropertiesWithoutUndo();
                 EditorUtility.SetDirty(asset);
 
-                WriteDrops(asset, spec.Loot);
+                WriteDrops(asset, spec.Loot, spec.LootRate > 0f ? spec.LootRate : 0.10f);
             }
         }
 
@@ -267,7 +350,7 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// reason to exist, and a potion often enough that the next fight is not gated on
         /// walking home.
         /// </summary>
-        private static void WriteDrops(ScriptableObject monsterData, string[] loot)
+        private static void WriteDrops(ScriptableObject monsterData, string[] loot, float rate)
         {
             var serialized = new SerializedObject(monsterData);
             SerializedProperty list = serialized.FindProperty("itemDropManager.randomItems");
@@ -281,7 +364,7 @@ namespace MultiplayerARPG.Demo.EditorTools
             WriteDrop(list.GetArrayElementAtIndex(0), "BanditInsignia", 0.55f, 2);
             WriteDrop(list.GetArrayElementAtIndex(1), "MinorHealingPotion", 0.30f, 2);
             for (int i = 0; i < loot.Length; ++i)
-                WriteDrop(list.GetArrayElementAtIndex(2 + i), loot[i], Mathf.Max(0.025f, 0.10f - i * 0.012f), 1);
+                WriteDrop(list.GetArrayElementAtIndex(2 + i), loot[i], Mathf.Max(0.025f, rate - i * rate * 0.12f), 1);
 
             // At most three of those at once, so a kill is a handful rather than a haul.
             serialized.FindProperty("itemDropManager.minDropItems").intValue = 1;
@@ -362,7 +445,11 @@ namespace MultiplayerARPG.Demo.EditorTools
                 Component<BaseMonsterCharacterEntity>($"{EntityDir}/DemoMarauderFemale.prefab"),
                 Component<BaseMonsterCharacterEntity>($"{EntityDir}/DemoCultistMale.prefab"),
                 Component<BaseMonsterCharacterEntity>($"{EntityDir}/DemoCultistFemale.prefab"),
+                Component<BaseMonsterCharacterEntity>($"{EntityDir}/DemoHierophant.prefab"),
             });
+            // Every map the game can put a character on. The island is the start map by
+            // being first; the crypt is only reached through its door.
+            SetList(serialized, "mapInfos", Maps());
 
             // The classes a character can be, and the enemy families it can fight. These
             // two lists were never written before, because with one of each the kit could
@@ -427,6 +514,180 @@ namespace MultiplayerARPG.Demo.EditorTools
             EditorUtility.SetDirty(prefab);
             AssetDatabase.SaveAssets();
             AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceUpdate);
+        }
+
+        // ---- audio -------------------------------------------------------------
+
+        private const string AudioDir = "Assets/OpenMMORPG/Demo/Audio";
+
+        /// <summary>
+        /// Makes every demo clip load with the things that reference it, in the
+        /// background, instead of on the main thread the first time it is played.
+        ///
+        /// Unity's importer default since 2022 is the opposite: no preload, no
+        /// background load, so an AudioSource's first Play() of a clip reads its samples
+        /// synchronously. That is harmless until it happens while a scene is loading
+        /// with its activation held - which is how the kit changes maps, holding the new
+        /// scene at 90% until it is ready - because Unity serialises asset loads and a
+        /// synchronous one queued behind a held scene load waits for it forever, with
+        /// the main thread blocked. A character walking out of the crypt took a footstep
+        /// or a hit in the two seconds the island takes to load, and the editor froze at
+        /// exactly that point twice. Preloaded clips are read while the scene that needs
+        /// them loads, which is the one time a load cannot get in anyone's way.
+        /// </summary>
+        internal static void PreloadAudio()
+        {
+            int changed = 0;
+            foreach (string guid in AssetDatabase.FindAssets("t:AudioClip", new[] { AudioDir }))
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guid);
+                var importer = AssetImporter.GetAtPath(path) as AudioImporter;
+                if (importer == null)
+                    continue;
+                AudioImporterSampleSettings settings = importer.defaultSampleSettings;
+                if (settings.preloadAudioData && importer.loadInBackground)
+                    continue;
+                settings.preloadAudioData = true;
+                importer.defaultSampleSettings = settings;
+                importer.loadInBackground = true;
+                importer.SaveAndReimport();
+                ++changed;
+            }
+            if (changed > 0)
+                Debug.Log($"[{nameof(DemoDatabaseWiring)}] Set {changed} audio clip(s) under {AudioDir} to preload in the background.");
+        }
+
+        // ---- the dungeon -------------------------------------------------------
+
+        /// <summary>
+        /// Opens the way between the island and the crypt.
+        ///
+        /// The kit does not read warp portals off the scene; it spawns them when a map
+        /// loads, from the warp portal database, one list per map. So the crypt door and
+        /// the landing's door are two entries here, each pointing at the other map and
+        /// the spot in it to arrive on, and the positions come from the two scene
+        /// builders so the door and the gate cannot drift apart. The map spawn server
+        /// also has to be told to host the crypt, or the warp would find no server to
+        /// send the character to, and the scene has to be in the build for the same
+        /// reason - and for the editor to be able to load it at all.
+        /// </summary>
+        private static void WireDungeon(ScriptableObject island)
+        {
+            var dungeon = AssetDatabase.LoadAssetAtPath<ScriptableObject>(DemoDungeonBuilder.MapInfoPath);
+            GameObject gatePrefab = AssetDatabase.LoadAssetAtPath<GameObject>(DemoDungeonBuilder.GatePrefabPath);
+            if (dungeon == null || gatePrefab == null)
+            {
+                Debug.LogWarning($"[{nameof(DemoDatabaseWiring)}] No dungeon to wire: run Open MMORPG > Demo > Build Dungeon Scene first.");
+                return;
+            }
+            var gate = gatePrefab.GetComponent<WarpPortalEntity>();
+
+            var portals = AssetDatabase.LoadAssetAtPath<ScriptableObject>($"{GameDataDir}/WarpPortalDatabase.asset");
+            if (portals == null)
+            {
+                Debug.LogError($"[{nameof(DemoDatabaseWiring)}] No warp portal database under {GameDataDir}.");
+                return;
+            }
+            var serialized = new SerializedObject(portals);
+            SerializedProperty maps = serialized.FindProperty("maps");
+            maps.arraySize = 2;
+            // Down: the crypt door on the island leads to the landing.
+            SerializedProperty down = maps.GetArrayElementAtIndex(0);
+            down.FindPropertyRelative("mapInfo").objectReferenceValue = island;
+            down.FindPropertyRelative("warpPortals").arraySize = 1;
+            WritePortal(down.FindPropertyRelative("warpPortals").GetArrayElementAtIndex(0), gate,
+                DemoSceneBuilder.CryptGateWorld, DemoSceneBuilder.CryptGateYaw,
+                dungeon, DemoDungeonBuilder.ArrivalPosition, DemoDungeonBuilder.ArrivalYaw);
+            // Up: the landing's door leads back out onto the doorstep.
+            SerializedProperty up = maps.GetArrayElementAtIndex(1);
+            up.FindPropertyRelative("mapInfo").objectReferenceValue = dungeon;
+            up.FindPropertyRelative("warpPortals").arraySize = 1;
+            WritePortal(up.FindPropertyRelative("warpPortals").GetArrayElementAtIndex(0), gate,
+                DemoDungeonBuilder.ExitGatePosition, DemoDungeonBuilder.ExitGateYaw,
+                island, DemoSceneBuilder.CryptArrivalWorld, DemoSceneBuilder.CryptArrivalYaw);
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            EditorUtility.SetDirty(portals);
+
+            WriteSpawningMaps();
+            WriteBuildScenes();
+        }
+
+        private static void WritePortal(SerializedProperty portal, Object entityPrefab, Vector3 at, float yaw, Object toMap, Vector3 toPosition, float toYaw)
+        {
+            portal.FindPropertyRelative("entityPrefab").objectReferenceValue = entityPrefab;
+            portal.FindPropertyRelative("position").vector3Value = at;
+            portal.FindPropertyRelative("rotation").vector3Value = new Vector3(0f, yaw, 0f);
+            portal.FindPropertyRelative("warpPortalType").enumValueIndex = 0;
+            portal.FindPropertyRelative("warpToMapInfo").objectReferenceValue = toMap;
+            portal.FindPropertyRelative("warpToPosition").vector3Value = toPosition;
+            portal.FindPropertyRelative("warpOverrideRotation").boolValue = true;
+            portal.FindPropertyRelative("warpToRotation").vector3Value = new Vector3(0f, toYaw, 0f);
+            portal.FindPropertyRelative("warpPointsByCondition").arraySize = 0;
+        }
+
+        /// <summary>
+        /// Tells the map spawn server to host every map. It launches one map server
+        /// process per entry, and a map with no process is a map a warp cannot reach:
+        /// the character is told it is warping and then nothing happens.
+        /// </summary>
+        private static void WriteSpawningMaps()
+        {
+            const string path = "Assets/OpenMMORPG/Demo/Prefabs/MMOServerInstance.prefab";
+            GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
+            if (prefab == null)
+            {
+                Debug.LogError($"[{nameof(DemoDatabaseWiring)}] Missing \"{path}\".");
+                return;
+            }
+            bool found = false;
+            foreach (Component component in prefab.GetComponentsInChildren<Component>(true))
+            {
+                if (component == null)
+                    continue;
+                var serialized = new SerializedObject(component);
+                if (serialized.FindProperty("spawningMaps") == null)
+                    continue;
+                SetList(serialized, "spawningMaps", Maps());
+                serialized.ApplyModifiedPropertiesWithoutUndo();
+                found = true;
+            }
+            if (!found)
+            {
+                Debug.LogError($"[{nameof(DemoDatabaseWiring)}] Nothing on \"{path}\" has a spawningMaps list.");
+                return;
+            }
+            EditorUtility.SetDirty(prefab);
+            AssetDatabase.SaveAssets();
+            AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceUpdate);
+        }
+
+        /// <summary>Puts the dungeon scene in the build, after the maps that are there already.</summary>
+        private static void WriteBuildScenes()
+        {
+            var scenes = new System.Collections.Generic.List<EditorBuildSettingsScene>(EditorBuildSettings.scenes);
+            foreach (EditorBuildSettingsScene scene in scenes)
+            {
+                if (scene.path == DemoDungeonBuilder.ScenePath)
+                {
+                    scene.enabled = true;
+                    EditorBuildSettings.scenes = scenes.ToArray();
+                    return;
+                }
+            }
+            scenes.Add(new EditorBuildSettingsScene(DemoDungeonBuilder.ScenePath, true));
+            EditorBuildSettings.scenes = scenes.ToArray();
+            Debug.Log($"[{nameof(DemoDatabaseWiring)}] Added {DemoDungeonBuilder.ScenePath} to the build settings.");
+        }
+
+        /// <summary>The maps, island first: the first map in the database is the start map.</summary>
+        private static Object[] Maps()
+        {
+            var maps = new System.Collections.Generic.List<Object>();
+            maps.Add(AssetDatabase.LoadAssetAtPath<ScriptableObject>($"{GameDataDir}/Resources/MapInfos/BaseMap.asset"));
+            var dungeon = AssetDatabase.LoadAssetAtPath<ScriptableObject>(DemoDungeonBuilder.MapInfoPath);
+            if (dungeon != null)
+                maps.Add(dungeon);
+            return maps.ToArray();
         }
 
         private static Object[] ClassAssets()

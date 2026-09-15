@@ -2,7 +2,9 @@ using MultiplayerARPG.GameData.Model.Playables;
 using System.Collections.Generic;
 using UnityEditor;
 using UnityEditor.Animations;
+using UnityEditor.SceneManagement;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 namespace MultiplayerARPG.Demo.EditorTools
 {
@@ -107,10 +109,92 @@ namespace MultiplayerARPG.Demo.EditorTools
             foreach (string gender in DemoEntityBuilder.PlayerBodies)
                 BuildRider(DemoEntityBuilder.PlayerEntityPath(gender), $"{ModelDir}/PlayerCharacterModel_{gender}.prefab");
 
+            PlaceInScene();
+
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();
             Debug.Log($"[{nameof(DemoMountBuilder)}] Built the horse mount. Re-run " +
                       "\"Wire Game Database\" so the whistle is registered as an item.");
+        }
+
+        // ---- placement -------------------------------------------------------
+
+        /// <summary>
+        /// Where the horse waits, relative to the village centre: just inside the fence
+        /// in the gap north-west of the green, stood along the rails the way a tethered
+        /// animal is, with its head toward the green. The user asked for it there; it
+        /// first stood by the cage wagon on the west lane.
+        /// </summary>
+        public static readonly Vector3 HorseLocalPosition = new Vector3(-6.4f, 0f, 12.2f);
+
+        /// <summary>
+        /// The fence's own run, measured off the placed panels: they lie on a line
+        /// bearing 62 degrees, so the horse does too. A kit-driven horse walks along
+        /// its +Z, and this is the yaw of that.
+        /// </summary>
+        public const float HorseLocalYaw = 62f;
+
+        /// <summary>
+        /// Stands the horse in the map scene, the way DemoNpcBuilder stands the NPCs: a
+        /// prefab instance under a root the scene rebuild keeps, so it can be moved by
+        /// hand afterwards and stays moved. A player walks up and activates it to mount;
+        /// nothing else is needed, because the whistle that summons one has no vendor
+        /// yet and a horse that is simply there is the better demonstration anyway.
+        /// Run again, it only puts the horse back if it is missing.
+        /// </summary>
+        [MenuItem("Open MMORPG/Demo/Place Mounts")]
+        public static void PlaceInScene()
+        {
+            GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(HorsePrefabPath);
+            if (prefab == null)
+            {
+                Debug.LogError($"[{nameof(DemoMountBuilder)}] No horse at {HorsePrefabPath}. Run Build Mounts first.");
+                return;
+            }
+
+            Scene scene = default;
+            bool wasOpen = false;
+            for (int i = 0; i < SceneManager.sceneCount; ++i)
+            {
+                Scene loaded = SceneManager.GetSceneAt(i);
+                if (loaded.isLoaded && loaded.path == DemoSceneBuilder.ScenePath)
+                {
+                    scene = loaded;
+                    wasOpen = true;
+                }
+            }
+            if (!wasOpen)
+                scene = EditorSceneManager.OpenScene(DemoSceneBuilder.ScenePath, OpenSceneMode.Additive);
+
+            GameObject root = null;
+            foreach (GameObject candidate in scene.GetRootGameObjects())
+            {
+                if (candidate.name == DemoSceneBuilder.MountRootName)
+                    root = candidate;
+            }
+            if (root == null)
+            {
+                root = new GameObject(DemoSceneBuilder.MountRootName);
+                SceneManager.MoveGameObjectToScene(root, scene);
+            }
+
+            if (root.transform.Find("Horse") == null)
+            {
+                Vector2 village = DemoIslandBuilder.VillageCentre;
+                var world = new Vector3(village.x + HorseLocalPosition.x, 0f, village.y + HorseLocalPosition.z);
+                world.y = DemoIslandBuilder.HeightAt(world.x, world.z);
+                var horse = (GameObject)PrefabUtility.InstantiatePrefab(prefab, scene);
+                horse.name = "Horse";
+                horse.transform.SetParent(root.transform, true);
+                horse.transform.position = world;
+                horse.transform.rotation = Quaternion.Euler(0f, HorseLocalYaw, 0f);
+                Debug.Log($"[{nameof(DemoMountBuilder)}] Placed the horse at {world:F1}.");
+            }
+
+            EditorSceneManager.MarkSceneDirty(scene);
+            EditorSceneManager.SaveScene(scene);
+            if (!wasOpen)
+                EditorSceneManager.CloseScene(scene, true);
         }
 
         /// <summary>
@@ -222,6 +306,8 @@ namespace MultiplayerARPG.Demo.EditorTools
                 controllerCollider.radius = 0.5f;
                 controllerCollider.center = new Vector3(0f, 0.9f, 0f);
                 entity.AddComponent<CharacterControllerEntityMovement>();
+                // A horse swims with its legs under and its barrel at the surface.
+                DemoEntityBuilder.SwimOnSurface(entity, 0.9f);
 
                 VehicleEntity vehicle = entity.AddComponent<VehicleEntity>();
                 vehicle.Seats.Add(new VehicleSeat
@@ -243,6 +329,7 @@ namespace MultiplayerARPG.Demo.EditorTools
                 SetIfPresent(serialized, "miniMapUiTransform", miniMapUi);
                 serialized.ApplyModifiedPropertiesWithoutUndo();
 
+                DemoAudioWiring.WireHorse(entity);
                 GameObject saved = PrefabUtility.SaveAsPrefabAsset(entity, HorsePrefabPath);
                 // Forced for the same reason DemoEntityBuilder forces it: the editor's loaded
                 // copy of a prefab is not refreshed by writing a new file over it.

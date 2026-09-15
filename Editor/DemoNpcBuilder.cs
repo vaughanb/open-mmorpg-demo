@@ -59,8 +59,28 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// </summary>
         private const float FacingCorrection = 180f;
 
-        public static readonly Vector3 MerchantLocalPosition = new Vector3(5.5f, 0f, 4.5f);
         public static readonly Vector3 ElderLocalPosition = new Vector3(-2.5f, 0f, 2f);
+
+        /// <summary>
+        /// The pedlar stands behind his counter, a step back from the stall and a little
+        /// off its middle, facing out over it the way the stall faces - which is toward
+        /// the green, where his customers are. He used to stand in front of it with his
+        /// back to his own goods. Given in the stall's space, so he follows the stall.
+        /// </summary>
+        public static Vector3 MerchantLocalPosition
+        {
+            get
+            {
+                Quaternion yaw = Quaternion.Euler(0f, DemoSceneBuilder.StallYaw, 0f);
+                return DemoSceneBuilder.StallLayout + yaw * new Vector3(0.6f, 0f, -1.0f);
+            }
+        }
+
+        /// <summary>Facing over the counter: the stall's own yaw, since its counter is on its +Z.</summary>
+        public static float MerchantYaw
+        {
+            get { return DemoSceneBuilder.StallYaw; }
+        }
 
         /// <summary>
         /// The tower guard stands on the watchtower deck, a little off centre so the
@@ -218,10 +238,12 @@ namespace MultiplayerARPG.Demo.EditorTools
             shopSerialized.FindProperty("title").stringValue = "Goods";
             shopSerialized.FindProperty("description").stringValue = "Fair prices, mostly.";
             shopSerialized.FindProperty("type").enumValueIndex = (int)NpcDialogType.Shop;
+            // The whistle that calls the horse is sold here, so a player who rode the
+            // one on the green and lost it out in the hills has a way to another.
             SetSellItems(shopSerialized, new[]
             {
                 "MinorHealingPotion", "IronShortsword", "PeasantTunic",
-                "PeasantTrousers", "PeasantShoes", "PeasantSleeves",
+                "PeasantTrousers", "PeasantShoes", "PeasantSleeves", "HorseWhistle",
             });
             shopSerialized.ApplyModifiedPropertiesWithoutUndo();
             EditorUtility.SetDirty(shop);
@@ -465,7 +487,7 @@ namespace MultiplayerARPG.Demo.EditorTools
             var placements = new[]
             {
                 new Stand { Name = "Fenwick", Title = "Fenwick the Keeper", Local = BankerLocalPosition, Yaw = Facing(BankerLocalPosition), Dialog = banker, Body = keeperEntity },
-                new Stand { Name = "Marek", Title = "Marek the Pedlar", Local = MerchantLocalPosition, Yaw = Facing(MerchantLocalPosition), Dialog = merchant, Body = villagerEntity },
+                new Stand { Name = "Marek", Title = "Marek the Pedlar", Local = MerchantLocalPosition, Yaw = MerchantYaw, Dialog = merchant, Body = villagerEntity },
                 new Stand { Name = "Hilde", Title = "Hilde the Innkeeper", Local = InnkeeperLocalPosition, Yaw = Facing(InnkeeperLocalPosition), Dialog = innkeeper, Body = innkeeperEntity },
                 new Stand { Name = "Rowan", Title = "Elder Rowan", Local = ElderLocalPosition, Yaw = Facing(ElderLocalPosition), Dialog = elder, Body = elderEntity },
                 new Stand { Name = "TowerGuard", Title = "Watchtower Guard", Local = TowerGuardLocalPosition, Yaw = DemoSceneBuilder.HouseYaw(DemoSceneBuilder.WatchtowerLayout), Dialog = towerGuard, Body = guardEntity },

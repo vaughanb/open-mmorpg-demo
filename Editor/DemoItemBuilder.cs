@@ -20,6 +20,13 @@ namespace MultiplayerARPG.Demo.EditorTools
     /// </summary>
     public static class DemoItemBuilder
     {
+        /// <summary>
+        /// Whether bows are drawn and held before loosing. True only for the shooter
+        /// controller, which is the one thing in the kit that starts a charge; with the
+        /// target-based controller a bow set to fire on release never fires at all.
+        /// </summary>
+        public const bool BowsCharge = false;
+
         private const string GameDataDir = "Assets/OpenMMORPG/Demo/GameData";
         private const string ResourcesDir = GameDataDir + "/Resources";
         private const string OutfitDir = "Assets/Plugins/Quaternius/Characters/Models/Outfits";
@@ -292,8 +299,13 @@ namespace MultiplayerARPG.Demo.EditorTools
                 // charge only for a weapon that fires on release, and that one flag is what
                 // turns "press to shoot" into "hold to draw, let go to loose" - the draw
                 // animation is never played without it. Everything else fires on press.
+                // ...but only the shooter controller ever starts that charge. The target-based
+                // controller the demo plays through now (see DemoControllerBuilder) never
+                // does, and a fire-on-release weapon that was never charged simply does not
+                // fire - the bow went dead in the ranger's hands. So bows fire on press
+                // unless the shooter is what is being built.
                 serialized.FindProperty("fireType").enumValueIndex =
-                    (int)(spec.TypeAsset == "Bow" ? FireType.FireOnRelease : FireType.SingleFire);
+                    (int)(spec.TypeAsset == "Bow" && BowsCharge ? FireType.FireOnRelease : FireType.SingleFire);
 
                 string socket = spec.TypeAsset == "Bow" ? SocketLeftHand : SocketRightHand;
                 Vector3 facing = IsBladed(spec.TypeAsset) ? BladeFacing : Vector3.zero;
@@ -303,6 +315,7 @@ namespace MultiplayerARPG.Demo.EditorTools
                            gripEuler, gripPosition, gripScale);
                 serialized.ApplyModifiedPropertiesWithoutUndo();
                 EditorUtility.SetDirty(item);
+                DemoAudioWiring.WireWeaponItem(item);
             }
         }
 

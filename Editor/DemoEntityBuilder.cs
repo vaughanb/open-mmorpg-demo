@@ -1,4 +1,4 @@
-using MultiplayerARPG.GameData.Model.Playables;
+﻿using MultiplayerARPG.GameData.Model.Playables;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.AI;
@@ -58,6 +58,9 @@ namespace MultiplayerARPG.Demo.EditorTools
             Build(EnemyTemplate, $"{ModelDir}/MarauderModel_Female.prefab", $"{EntityDir}/DemoMarauderFemale.prefab", "Marauder");
             Build(EnemyTemplate, $"{ModelDir}/CultistModel_Male.prefab", $"{EntityDir}/DemoCultistMale.prefab", "Cultist");
             Build(EnemyTemplate, $"{ModelDir}/CultistModel_Female.prefab", $"{EntityDir}/DemoCultistFemale.prefab", "Cultist");
+            // The Hierophant, who holds the crypt's sanctum: a cultist a head taller than
+            // the rest, with the stats and the loot table of a boss. See DemoDungeonBuilder.
+            Build(EnemyTemplate, $"{ModelDir}/CultistModel_Male.prefab", $"{EntityDir}/DemoHierophant.prefab", "Hierophant", null, 1.12f);
             BuildNpc($"{ModelDir}/VillagerModel_Male.prefab", $"{EntityDir}/DemoVillager.prefab");
             BuildNpc($"{ModelDir}/ElderModel_Male.prefab", $"{EntityDir}/DemoElder.prefab");
             BuildNpc($"{ModelDir}/KeeperModel_Male.prefab", $"{EntityDir}/DemoKeeper.prefab");
@@ -97,6 +100,14 @@ namespace MultiplayerARPG.Demo.EditorTools
             Transform characterUi = MakeAnchor(transforms.transform, "UIElementContainer", CharacterHeight + 0.25f);
             Transform miniMapUi = MakeAnchor(transforms.transform, "MiniMapContainer", 0f);
             Transform questIndicator = MakeAnchor(transforms.transform, "QuestIndicatorContainer", CharacterHeight + 0.55f);
+            // The kit's quest indicator is a world-space canvas laid out in pixels - its
+            // "!" is a 160 by 40 text - and NpcEntity instantiates it into this container
+            // with no scaling of its own, so the container has to carry the pixel-to-metre
+            // scale the kit's world-space UI assumes. At scale one the exclamation mark was
+            // a hundred and sixty metres wide, and read as a yellow beam over the elder; at
+            // a hundredth it was a hand's width, lost against the plaster from across the
+            // green. This makes the mark about half a metre tall.
+            questIndicator.localScale = Vector3.one * 0.045f;
 
             NpcEntity npc = entity.AddComponent<NpcEntity>();
             var serialized = new SerializedObject(npc);
@@ -137,6 +148,7 @@ namespace MultiplayerARPG.Demo.EditorTools
                 agent.stoppingDistance = 0.3f;
                 entity.AddComponent<MultiplayerARPG.Demo.DemoPatrol>();
             }
+            DemoAudioWiring.WireCharacter(entity, modelPath.Contains("Female"));
 
             PrefabUtility.SaveAsPrefabAsset(entity, outputPath);
             GiveOwnNetworkId(outputPath);
@@ -231,7 +243,36 @@ namespace MultiplayerARPG.Demo.EditorTools
             return created;
         }
 
-        private static void Build(string templatePath, string modelPath, string outputPath, string monsterData = null, string title = null)
+        /// <summary>
+        /// Players swim on the surface and only there. The kit's movement can dive
+        /// (SwimUp/SwimDown), but with autoSwimToSurface on it always heads for the
+        /// surface and a Down input is ignored, and the demo binds no dive keys anyway.
+        /// The sea itself is the trigger volume DemoSceneBuilder puts under the water
+        /// plane. Also given to the horse, so a mount ridden into the sea floats rather
+        /// than sinks. The kit holds the capsule 0.75 of its height under the surface,
+        /// which is right for treading water and wrong for the demo's flat swim clips, so
+        /// <see cref="DemoSurfaceSwimmer"/> lifts the model to <paramref name="depthBelowSurface"/>
+        /// while swimming: near the surface for a body lying flat, deeper for the horse.
+        /// </summary>
+        internal static void SwimOnSurface(GameObject entity, float depthBelowSurface = 0.15f)
+        {
+            var movement = entity.GetComponent<CharacterControllerEntityMovement>();
+            if (movement == null)
+            {
+                Debug.LogError($"[{nameof(DemoEntityBuilder)}] {entity.name} has no CharacterControllerEntityMovement to set swimming on.");
+                return;
+            }
+            var serialized = new SerializedObject(movement);
+            serialized.FindProperty("autoSwimToSurface").boolValue = true;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+
+            var swimmer = entity.GetComponent<MultiplayerARPG.Demo.DemoSurfaceSwimmer>();
+            if (swimmer == null)
+                swimmer = entity.AddComponent<MultiplayerARPG.Demo.DemoSurfaceSwimmer>();
+            swimmer.depthBelowSurface = depthBelowSurface;
+        }
+
+        private static void Build(string templatePath, string modelPath, string outputPath, string monsterData = null, string title = null, float scale = 1f)
         {
             GameObject template = AssetDatabase.LoadAssetAtPath<GameObject>(templatePath);
             GameObject model = AssetDatabase.LoadAssetAtPath<GameObject>(modelPath);
@@ -260,6 +301,10 @@ namespace MultiplayerARPG.Demo.EditorTools
             GameObject modelInstance = (GameObject)PrefabUtility.InstantiatePrefab(model);
             modelInstance.transform.SetParent(entity.transform, false);
             modelInstance.name = "Model";
+            // A boss is told apart at a glance by its size; the scale goes on the model
+            // rather than the entity, so the capsule and the anchors stay where the kit
+            // expects them.
+            modelInstance.transform.localScale = Vector3.one * scale;
 
             CharacterModelManager manager = entity.GetComponent<CharacterModelManager>();
             manager.MainTpsModel = modelInstance.GetComponent<PlayableCharacterModel>();
@@ -270,6 +315,9 @@ namespace MultiplayerARPG.Demo.EditorTools
             // it takes; the network identity gathers its behaviours when it starts.
             if (monsterData == null && entity.GetComponent<CharacterLadderComponent>() == null)
                 entity.AddComponent<CharacterLadderComponent>();
+
+            if (monsterData == null)
+                SwimOnSurface(entity);
 
             if (monsterData == null)
             {
@@ -302,6 +350,7 @@ namespace MultiplayerARPG.Demo.EditorTools
 
             FitColliders(entity);
             PlaceAnchors(entity);
+            DemoAudioWiring.WireCharacter(entity, modelPath.Contains("Female"));
 
             PrefabUtility.SaveAsPrefabAsset(entity, outputPath);
             GiveOwnNetworkId(outputPath);
@@ -329,7 +378,7 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// beyond the wrong monster turning up. Set from the saved prefab's GUID, the way
         /// the identity itself would for a prefab made by hand.
         /// </summary>
-        private static void GiveOwnNetworkId(string prefabPath)
+        internal static void GiveOwnNetworkId(string prefabPath)
         {
             GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
             var identity = prefab != null ? prefab.GetComponent<LiteNetLibManager.LiteNetLibIdentity>() : null;

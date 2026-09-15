@@ -233,13 +233,15 @@ namespace MultiplayerARPG.Demo.EditorTools
             return moves;
         }
 
-        public static ActionAnimation Attack(string clip, float triggerRate, float speedRate = 0f)
+        public static ActionAnimation Attack(string clip, float triggerRate, float speedRate = 0f, AudioClip[] audio = null)
         {
             return new ActionAnimation
             {
                 state = Action(clip, speedRate),
                 triggerDurationRates = new[] { triggerRate },
                 durationType = AnimationDurationType.ByClipLength,
+                // Played as the swing starts; see DemoAudioWiring for the families.
+                audioClips = audio ?? new AudioClip[0],
             };
         }
 
@@ -389,7 +391,7 @@ namespace MultiplayerARPG.Demo.EditorTools
                 hurtState = Action("Hit_Chest"),
                 deadState = State("Death01"),
                 pickupState = Action("PickUp_Table"),
-                rightHandAttackAnimations = new[] { Attack("Sword_Attack", 0.45f) },
+                rightHandAttackAnimations = new[] { Attack("Sword_Attack", 0.45f, audio: DemoAudioWiring.Clips(DemoAudioWiring.SwordSwing)) },
             };
         }
 

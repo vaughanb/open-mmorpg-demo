@@ -78,6 +78,18 @@ namespace MultiplayerARPG.Demo.EditorTools
             }
             BuildReport report = BuildPipeline.BuildPlayer(options);
 
+            // A dedicated server build leaves the editor on the Server subtarget, and the
+            // editor then compiles the whole project with UNITY_SERVER: the kit strips every
+            // client-only block out of play mode - animation and weapon sounds among them -
+            // and nothing says why. The demo is played from the editor as a client, so the
+            // editor goes back to the player subtarget whatever it was before.
+            if (EditorUserBuildSettings.standaloneBuildSubtarget != StandaloneBuildSubtarget.Player)
+            {
+                EditorUserBuildSettings.standaloneBuildSubtarget = StandaloneBuildSubtarget.Player;
+                Debug.Log($"[{nameof(DemoServerBuilder)}] Editor put back on the Player subtarget; the " +
+                          "project recompiles without UNITY_SERVER.");
+            }
+
             BuildSummary summary = report.summary;
             if (summary.result == BuildResult.Succeeded)
             {

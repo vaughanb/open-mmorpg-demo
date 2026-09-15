@@ -24,11 +24,14 @@ namespace MultiplayerARPG.Demo.EditorTools
         public const string ScenePath = "Assets/OpenMMORPG/Demo/Scenes/DemoMap.unity";
 
         /// <summary>
-        /// The one root a rebuild keeps. The NPCs are scene objects placed by
-        /// DemoNpcBuilder and then moved about by hand in the editor, which is the point
-        /// of having them in the scene at all - so they are not the generator's to wipe.
+        /// The roots a rebuild keeps. The NPCs and the horse are scene objects placed
+        /// by DemoNpcBuilder and DemoMountBuilder and then moved about by hand in the
+        /// editor, which is the point of having them in the scene at all - so they are
+        /// not the generator's to wipe.
         /// </summary>
         public const string NpcRootName = "Npcs";
+        public const string MountRootName = "Mounts";
+        public static readonly string[] KeptRootNames = { NpcRootName, MountRootName };
         private const string NatureDir = "Assets/Plugins/Quaternius/Nature/Prefabs";
         private const string PropDir = "Assets/Plugins/Quaternius/Props/Models";
         private const string EntityDir = "Assets/OpenMMORPG/Demo/Prefabs/GamePlay/CharacterEntities";
@@ -73,6 +76,18 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// <summary>Which house is the alehouse: the one with the tankards on its sign.</summary>
         public const int AlehouseIndex = 2;
 
+        /// <summary>Which house is the smith's: the anvil on its sign, and the yard out front.</summary>
+        public const int SmithHouseIndex = 1;
+
+        /// <summary>
+        /// The pedlar's stall on the green: where it stands and which way it is turned.
+        /// Its counter and goods are on its own +Z, which this yaw points at the fire, so
+        /// customers come to it from the green. DemoNpcBuilder stands the pedlar off these
+        /// so he is behind his own counter however the market is moved.
+        /// </summary>
+        public static readonly Vector3 StallLayout = new Vector3(6f, 0f, 5f);
+        public const float StallYaw = 215f;
+
         /// <summary>
         /// Where the watchtower stands: in the east gap of the ring, between the alehouse
         /// and the house beyond it, which is the side the bandits' camp is on. It takes the
@@ -114,12 +129,12 @@ namespace MultiplayerARPG.Demo.EditorTools
         {
             Scene scene = EditorSceneManager.OpenScene(ScenePath, OpenSceneMode.Single);
 
-            GameObject npcs = null;
+            var kept = new System.Collections.Generic.List<GameObject>();
             foreach (GameObject root in scene.GetRootGameObjects())
             {
-                if (root.name == NpcRootName)
+                if (System.Array.IndexOf(KeptRootNames, root.name) >= 0)
                 {
-                    npcs = root;
+                    kept.Add(root);
                     continue;
                 }
                 Object.DestroyImmediate(root);
@@ -133,6 +148,7 @@ namespace MultiplayerARPG.Demo.EditorTools
             BuildSea(scene);
             BuildVillage(scene);
             BuildCamp(scene);
+            BuildCrypt(scene);
             BuildCliffs(scene);
             System.Collections.Generic.List<Vector3> boulders = BuildNature(scene);
             BuildSpawners(scene);
@@ -142,13 +158,18 @@ namespace MultiplayerARPG.Demo.EditorTools
             NavMeshSurface surface = terrain.AddComponent<NavMeshSurface>();
             surface.collectObjects = CollectObjects.All;
             surface.useGeometry = NavMeshCollectGeometry.PhysicsColliders;
-            // The NPCs stand on the green with a capsule each, which the bake would read
-            // as a post and cut a hole round. They are not part of the ground.
-            if (npcs != null)
-                npcs.SetActive(false);
+            // The sea's swimming volume is a trigger on the Water layer; a bake ignores
+            // triggers, but the layer is masked out as well so it can never read as a
+            // floor at sea level.
+            surface.layerMask &= ~(1 << PhysicLayers.Water);
+            // The NPCs and the horse stand on the green with a capsule each, which the
+            // bake would read as a post and cut a hole round. They are not part of the
+            // ground, and they move.
+            foreach (GameObject root in kept)
+                root.SetActive(false);
             BakeWithDoorsOpen(surface);
-            if (npcs != null)
-                npcs.SetActive(true);
+            foreach (GameObject root in kept)
+                root.SetActive(true);
 
             CheckArrivalIsClear();
 
@@ -583,6 +604,71 @@ namespace MultiplayerARPG.Demo.EditorTools
             // The sea is transparent and its crests only exist in the vertex shader, so a
             // shadow from it would be a hard-edged slab cast by the flat mesh underneath.
             renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+
+            BuildSeaVolume(go);
+            BuildAmbience(go);
+        }
+
+        /// <summary>
+        /// The island's two ambience beds, under the sea root so `Rebuild Sea` renews
+        /// them: the nature loop everywhere, and the waves loud on the beach and a murmur
+        /// on the hill. Each is a 2D loop driven by <see cref="MultiplayerARPG.Demo.DemoAmbientLoop"/>,
+        /// which follows the ambient volume setting. A bed whose clip is not provided yet
+        /// is simply not built; DemoAudioWiring lists what is missing.
+        /// </summary>
+        private static void BuildAmbience(GameObject sea)
+        {
+            var root = new GameObject("Ambience");
+            root.transform.SetParent(sea.transform, false);
+            AmbientBed(root, "Nature", DemoAudioWiring.Clips(DemoAudioWiring.AmbientNature), 0.5f, false);
+            AmbientBed(root, "Shore", DemoAudioWiring.Clips(DemoAudioWiring.OceanWaves), 0.8f, true);
+        }
+
+        private static void AmbientBed(GameObject parent, string name, AudioClip[] clips, float volume, bool fadeWithHeight)
+        {
+            if (clips.Length == 0)
+                return;
+            var go = new GameObject(name);
+            go.transform.SetParent(parent.transform, false);
+            var source = go.AddComponent<AudioSource>();
+            source.clip = clips[0];
+            source.loop = true;
+            source.playOnAwake = true;
+            source.spatialBlend = 0f;
+            source.volume = volume;
+            var loop = go.AddComponent<MultiplayerARPG.Demo.DemoAmbientLoop>();
+            loop.baseVolume = volume;
+            loop.fadeWithHeight = fadeWithHeight;
+            loop.seaLevel = DemoIslandBuilder.WaterLevel;
+        }
+
+        /// <summary>
+        /// How far below sea level the water volume reaches. Deeper than the seabed, so a
+        /// character can never fall out of the bottom of it.
+        /// </summary>
+        private const float SeaVolumeDepth = 30f;
+
+        /// <summary>
+        /// The water the kit can swim in. To the kit, water is a trigger collider on the
+        /// built-in Water layer: a character's movement keeps the last one it entered and
+        /// counts itself under water once it sits low enough against that collider's top,
+        /// so the top of this box has to be sea level exactly. The box covers the whole sea
+        /// mesh and reaches below the seabed. Walking in from the beach, the character
+        /// wades until the bottom drops away and then swims; the movement's
+        /// autoSwimToSurface (set on the player entities and the horse) keeps it on the
+        /// surface and ignores any attempt to dive, which is all the demo wants of the
+        /// sea. Raycasts that find ground ignore triggers, so spawners, warps and the
+        /// camera's wall spring (which masks Water out anyway) see nothing new.
+        /// </summary>
+        private static void BuildSeaVolume(GameObject sea)
+        {
+            var volume = new GameObject("Volume");
+            volume.transform.SetParent(sea.transform, false);
+            volume.layer = PhysicLayers.Water;
+            var box = volume.AddComponent<BoxCollider>();
+            box.isTrigger = true;
+            box.center = new Vector3(0f, DemoIslandBuilder.WaterLevel - SeaVolumeDepth * 0.5f, 0f);
+            box.size = new Vector3(SeaRadius * 2f, SeaVolumeDepth, SeaRadius * 2f);
         }
 
         /// <summary>
@@ -647,10 +733,12 @@ namespace MultiplayerARPG.Demo.EditorTools
             Vector2 centre = DemoIslandBuilder.VillageCentre;
             root.transform.position = new Vector3(centre.x, DemoIslandBuilder.VillageHeight, centre.y);
 
+            var houses = new Transform[HouseLayout.Length];
             for (int i = 0; i < HouseLayout.Length; ++i)
             {
                 bool isBank = i == BankHouseIndex;
                 var house = new GameObject(isBank ? "House_Bank" : $"House_{i + 1}");
+                houses[i] = house.transform;
                 house.transform.SetParent(root.transform, false);
                 house.transform.localPosition = HouseLayout[i];
                 house.transform.localRotation = Quaternion.Euler(0f, HouseYaw(HouseLayout[i]), 0f);
@@ -669,16 +757,35 @@ namespace MultiplayerARPG.Demo.EditorTools
             var props = new GameObject("Props");
             props.transform.SetParent(root.transform, false);
 
-            // A market on the green: the merchant's stall, produce, and somewhere to sit.
-            GroundProp("Stall_Vegetables_Full", props.transform, 6f, 5f, 215f);
-            GroundProp("FarmCrate_Apple", props.transform, 3.7f, 6.7f, 20f);
-            GroundProp("FarmCrate_Leek", props.transform, 7.6f, 6.4f, -35f);
+            // A market on the green. The produce sits with the stall it is sold from,
+            // squared to it and butted against its ends, so the stall reads as a stall
+            // with stock and not as a stall with crates dropped near it.
+            GameObject stall = GroundProp("Stall_Vegetables_Full", props.transform, StallLayout.x, StallLayout.z, StallYaw);
+            Beside(stall, props.transform, new Vector3(-1.35f, 0f, 0f), "FarmCrate_Apple");
+            Beside(stall, props.transform, new Vector3(2.55f, 0f, 0f), "FarmCrate_Leek");
+            Beside(stall, props.transform, new Vector3(-1.35f, 0f, 0.85f), "Barrel_Apples");
             GroundProp("Stall_Potions", props.transform, 9.5f, 1.5f, 250f);
-            GroundProp("Bench", props.transform, -1.5f, 6.5f, 15f);
-            GroundProp("Bench", props.transform, 2.5f, -6.5f, 190f);
-            GroundProp("Barrel", props.transform, -6.5f, 3.5f, 0f);
-            GroundProp("Barrel_Apples", props.transform, -7.4f, 4.4f, 40f);
-            GroundProp("Crate_Wooden", props.transform, -5.6f, 4.6f, 12f);
+
+            // Two benches round the fire, across from each other, each turned to run
+            // along the circle so whoever sits faces the flames. Three metres puts the
+            // near edge clear of the tripod and the far one clear of the guard's round.
+            foreach (float angle in new[] { 45f, 225f })
+            {
+                float radians = angle * Mathf.Deg2Rad;
+                GroundProp("Bench", props.transform, Mathf.Cos(radians) * 3f, Mathf.Sin(radians) * 3f, -angle - 90f);
+            }
+
+            // Stores stand where they were delivered: casks against the alehouse wall
+            // beside its door, and the smith's crate and quenching barrel between his
+            // door and his bench. Each is flush to the wall and squared to it. They used
+            // to stand in a loose group in the open by the west houses, at odd angles,
+            // which read as things dropped rather than things put down.
+            Outside(props.transform, houses[AlehouseIndex], -1.7f, "Barrel", 0f);
+            // The second cask sits a hand further along than its width asks: it is turned a
+            // little, and the audit boxes a turned barrel wider than a barrel is.
+            Outside(props.transform, houses[AlehouseIndex], -2.55f, "Barrel_Dark", 25f);
+            Outside(props.transform, houses[SmithHouseIndex], 1.5f, "Crate_Wooden", 0f);
+            Outside(props.transform, houses[SmithHouseIndex], 2.35f, "Barrel", 0f);
             // The cage wagon is parked at the west edge of the green, by the lane out
             // between the bank and the house beyond it. It used to stand at (7, -3.5),
             // which was the middle of the green's southeast side - and once the alehouse
@@ -1667,6 +1774,50 @@ namespace MultiplayerARPG.Demo.EditorTools
             return instance;
         }
 
+        /// <summary>
+        /// Stands a prop against the outside of a house's front wall - the exterior
+        /// version of Against(): a position along the wall is given, and how far out the
+        /// prop stands is measured off the prop, so its back touches the wall face and it
+        /// is squared to the wall whatever way the house is turned.
+        /// </summary>
+        private static GameObject Outside(Transform parent, Transform house, float along, string prefabName, float yaw)
+        {
+            GameObject instance = Prop(prefabName, parent, Vector3.zero, 0f);
+            if (instance == null)
+                return null;
+            instance.transform.rotation = house.rotation * Quaternion.Euler(0f, yaw, 0f);
+            float face = OuterFace(house, Side.South);
+            Bounds bounds = DemoVillageBuilder.LocalBounds(house, instance.transform);
+            // A finger's width off the plaster, so the two do not z-fight where they meet.
+            const float gap = 0.03f;
+            var move = new Vector3(along - bounds.center.x, 0f, face - gap - bounds.max.z);
+            instance.transform.position += house.TransformVector(move);
+            Seat(instance);
+            return instance;
+        }
+
+        /// <summary>
+        /// Stands a prop at an offset from another, in that other's own space and turned
+        /// the same way - how a crate goes with the stall it belongs to.
+        /// </summary>
+        private static GameObject Beside(GameObject anchor, Transform parent, Vector3 offset, string prefabName)
+        {
+            if (anchor == null)
+                return null;
+            Vector3 world = anchor.transform.TransformPoint(offset);
+            Vector3 local = parent.InverseTransformPoint(world);
+            return GroundProp(prefabName, parent, local.x, local.z, anchor.transform.eulerAngles.y - parent.eulerAngles.y);
+        }
+
+        /// <summary>Rests a placed prop's lowest point on the ground under it.</summary>
+        private static void Seat(GameObject instance)
+        {
+            Bounds bounds = DemoVillageBuilder.LocalBounds(instance.transform, instance.transform);
+            Vector3 world = instance.transform.position;
+            float ground = DemoIslandBuilder.HeightAt(world.x, world.z);
+            instance.transform.position = new Vector3(world.x, ground - bounds.min.y, world.z);
+        }
+
         /// <summary>Places a Fantasy Props model, keeping its collider if the pack ships one.</summary>
         /// <summary>
         /// Shuts anything that ships open on a hinge. The chests do: their rig is posed
@@ -1705,7 +1856,7 @@ namespace MultiplayerARPG.Demo.EditorTools
         }
 
         /// <param name="solid">Whether it gets collision. Things fixed above head height do not.</param>
-        private static GameObject Prop(string prefabName, Transform parent, Vector3 localPosition, float yaw, bool solid = true)
+        internal static GameObject Prop(string prefabName, Transform parent, Vector3 localPosition, float yaw, bool solid = true)
         {
             GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>($"{PropDir}/{prefabName}.fbx");
             if (prefab == null)
@@ -1794,6 +1945,172 @@ namespace MultiplayerARPG.Demo.EditorTools
             Scatter(root.transform, "Rock_Medium_1", 6, 2.2f, 0.35f);
 
             MarkStatic(root);
+        }
+
+        // ---- the crypt ---------------------------------------------------------
+
+        /// <summary>The crypt front, in cells: three wide so its door is in the middle, and two deep.</summary>
+        public const int CryptCellsX = 3;
+        public const int CryptCellsZ = 2;
+
+        /// <summary>
+        /// Which way the crypt faces: door toward the village, which is the way anyone
+        /// walking out to it comes. The same rule as the houses - local -Z is the door.
+        /// </summary>
+        public static float CryptYaw
+        {
+            get
+            {
+                Vector2 away = DemoIslandBuilder.CryptCentre - DemoIslandBuilder.VillageCentre;
+                return HouseYaw(new Vector3(away.x, 0f, away.y));
+            }
+        }
+
+        public static Vector3 CryptOrigin
+        {
+            get { return new Vector3(DemoIslandBuilder.CryptCentre.x, DemoIslandBuilder.CryptHeight, DemoIslandBuilder.CryptCentre.y); }
+        }
+
+        /// <summary>A point in the crypt's own space, on the island.</summary>
+        public static Vector3 CryptToWorld(Vector3 local)
+        {
+            return CryptOrigin + Quaternion.Euler(0f, CryptYaw, 0f) * local;
+        }
+
+        /// <summary>
+        /// Where the gate down into the dungeon stands: on the door's own line, so that
+        /// stepping through the arch is what takes you down. The gate is not placed here;
+        /// the kit spawns it from the warp portal database, which DemoDatabaseWiring
+        /// writes from these.
+        /// </summary>
+        public static Vector3 CryptGateWorld
+        {
+            get { return CryptToWorld(new Vector3(0f, 0f, -CryptCellsZ * DemoVillageBuilder.Cell * 0.5f - 0.1f)); }
+        }
+
+        public static float CryptGateYaw { get { return CryptYaw; } }
+
+        /// <summary>
+        /// Where a character coming back up arrives: two paces out from the door and
+        /// facing away from it, well clear of the gate's trigger - which reaches half a
+        /// metre out from the door line - or they would be sent straight back down.
+        /// </summary>
+        public static Vector3 CryptArrivalWorld
+        {
+            get { return CryptToWorld(new Vector3(0f, 0.05f, -4.4f)); }
+        }
+
+        public static float CryptArrivalYaw { get { return CryptYaw + 180f; } }
+
+        /// <summary>
+        /// The way into the dungeon: a squat brick vault set into the hillside, its arch
+        /// open on nothing but dark. It is the houses' own masonry - the same walls, the
+        /// same quoins, the brick floor slab laid again on top for a roof - because a
+        /// crypt the villagers' ancestors built would be. The rocks are the outcrop it
+        /// was dug into, the same boulders grown large that the cliffs are made of.
+        ///
+        /// Inside is a black unlit box. With the sky lighting everything from every side,
+        /// a closed room here would be plainly lit through its own doorway, and a lit
+        /// room is a room, not a way down. Unlit black is the one thing that reads as
+        /// depth. The warp trigger stands in the arch, so a player never gets far enough
+        /// in to find the box.
+        /// </summary>
+        private static void BuildCrypt(Scene scene)
+        {
+            GameObject root = Root(scene, "Crypt");
+            root.transform.position = CryptOrigin;
+            root.transform.rotation = Quaternion.Euler(0f, CryptYaw, 0f);
+            Transform t = root.transform;
+            const float cell = DemoVillageBuilder.Cell;
+            const float storey = DemoVillageBuilder.WallHeight;
+            float halfX = CryptCellsX * cell * 0.5f;
+            float halfZ = CryptCellsZ * cell * 0.5f;
+
+            // Floor and roof, brick slabs both. The walls are 0.12 taller than a storey,
+            // so they stand a little proud of the roof slab as a low parapet.
+            for (int x = 0; x < CryptCellsX; ++x)
+            {
+                for (int z = 0; z < CryptCellsZ; ++z)
+                {
+                    var at = new Vector3(-halfX + cell * (x + 0.5f), 0f, -halfZ + cell * (z + 0.5f));
+                    DemoVillageBuilder.Place("Floor_Brick", t, at, 0f);
+                    DemoVillageBuilder.Place("Floor_Brick", t, at + Vector3.up * storey, 0f);
+                }
+            }
+
+            int doorCell = CryptCellsX / 2;
+            for (int x = 0; x < CryptCellsX; ++x)
+            {
+                float px = -halfX + cell * (x + 0.5f);
+                bool door = x == doorCell;
+                var south = new Vector3(px, 0f, -halfZ);
+                DemoVillageBuilder.Place(door ? "Wall_UnevenBrick_Door_Round" : "Wall_UnevenBrick_Straight", t, south, 180f);
+                if (door)
+                    DemoVillageBuilder.Place("DoorFrame_Round_Brick", t, south, 180f);
+                DemoVillageBuilder.Place("Wall_UnevenBrick_Straight", t, new Vector3(px, 0f, halfZ), 0f);
+            }
+            for (int z = 0; z < CryptCellsZ; ++z)
+            {
+                float pz = -halfZ + cell * (z + 0.5f);
+                DemoVillageBuilder.Place("Wall_UnevenBrick_Straight", t, new Vector3(halfX, 0f, pz), 90f);
+                DemoVillageBuilder.Place("Wall_UnevenBrick_Straight", t, new Vector3(-halfX, 0f, pz), 270f);
+            }
+            // Same quoin, same turns, as DemoVillageBuilder.BuildHouse.
+            const string corner = "Corner_Exterior_Brick";
+            DemoVillageBuilder.Place(corner, t, new Vector3(-halfX, 0f, -halfZ), 0f);
+            DemoVillageBuilder.Place(corner, t, new Vector3(-halfX, 0f, halfZ), 90f);
+            DemoVillageBuilder.Place(corner, t, new Vector3(halfX, 0f, halfZ), 180f);
+            DemoVillageBuilder.Place(corner, t, new Vector3(halfX, 0f, -halfZ), 270f);
+
+            GameObject dark = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            dark.name = "Darkness";
+            dark.transform.SetParent(t, false);
+            Object.DestroyImmediate(dark.GetComponent<Collider>());
+            dark.transform.localPosition = new Vector3(0f, storey * 0.5f, 0.15f);
+            dark.transform.localScale = new Vector3(halfX * 2f - 0.3f, storey - 0.05f, halfZ * 2f - 0.1f);
+            dark.GetComponent<MeshRenderer>().sharedMaterial = DemoDungeonBuilder.Darkness();
+
+            // Torches either side of the arch, lit by night as the village's are, and
+            // mounted the same way: measured to the wall's outer face.
+            var torches = new GameObject("Torches");
+            torches.transform.SetParent(t, false);
+            Mount(torches.transform, t, Side.South, -1.7f);
+            Mount(torches.transform, t, Side.South, 1.7f);
+
+            // What lies about a door nobody living uses. The rune ring is where a
+            // character coming up arrives, so it is the one thing on the doorstep with
+            // no collision.
+            var props = new GameObject("Props");
+            props.transform.SetParent(t, false);
+            GroundProp("Skull", props.transform, -2.8f, -3.3f, 35f);
+            GroundProp("Skull_Top", props.transform, 3.1f, -3.4f, 300f);
+            GroundProp("Vase_Rubble_Large", props.transform, 2.1f, -2.6f, 80f);
+            GroundProp("Chain_Coil", props.transform, -1.5f, -2.6f, 15f);
+            GameObject runes = GroundProp("Runes", props.transform, 0f, -4.4f, 0f);
+            if (runes != null)
+                runes.transform.localScale = Vector3.one * 1.6f;
+
+            // The outcrop the crypt is dug into: boulders grown to the cliffs' size,
+            // bedded into the shelf behind and beside it so the front is what shows.
+            var rocks = new GameObject("Rocks");
+            rocks.transform.SetParent(t, false);
+            Outcrop(rocks.transform, "Rock_Medium_1", new Vector3(-2.6f, -0.6f, 2.9f), 1.7f, 20f);
+            Outcrop(rocks.transform, "Rock_Medium_2", new Vector3(2.8f, -0.7f, 3.2f), 2.0f, 200f);
+            Outcrop(rocks.transform, "Rock_Medium_3", new Vector3(4.1f, -0.5f, 0.6f), 1.4f, 90f);
+            Outcrop(rocks.transform, "Rock_Medium_1", new Vector3(-4.2f, -0.5f, 1.3f), 1.5f, 250f);
+
+            MarkStatic(root);
+        }
+
+        private static void Outcrop(Transform parent, string prefabName, Vector3 localPosition, float scale, float yaw)
+        {
+            GameObject rock = InstantiateNature(prefabName, parent);
+            if (rock == null)
+                return;
+            rock.transform.localPosition = localPosition;
+            rock.transform.localRotation = Quaternion.Euler(0f, yaw, 0f);
+            rock.transform.localScale = Vector3.one * scale;
+            AddCollider(rock);
         }
 
         // ---- harvestables ----------------------------------------------------
@@ -2590,11 +2907,21 @@ namespace MultiplayerARPG.Demo.EditorTools
             // Bandits in ranger leathers hold the fields by the village, cultists in robes
             // keep to the hills, and the marauders in plate hold the camp, which is both the
             // hardest fight and the heaviest armour.
-            AddSpawner(root, "Spawn_Outskirts", new Vector2(-6f, -4f), 42f, banditMale, 1, 2, 8);
+            // The outskirts area used to be centred on (-6, -4) with a 42m radius, and the
+            // village-peace rule below slid it 72m out from the green - which put it
+            // squarely over the crypt's doorstep, so a character coming up out of the
+            // crypt was killed on the doorstep by level-two bandits. This centre is
+            // where that rule was going to move it anyway, with a radius that stops
+            // short of the crypt.
+            AddSpawner(root, "Spawn_Outskirts", new Vector2(14f, 0f), 30f, banditMale, 1, 2, 8);
             AddSpawner(root, "Spawn_Woods", new Vector2(26f, 30f), 38f, banditFemale, 2, 4, 7);
             AddSpawner(root, "Spawn_Woods_Cultists", new Vector2(26f, 30f), 34f, cultistMale, 3, 4, 4);
-            AddSpawner(root, "Spawn_Hills", new Vector2(4f, -46f), 34f, cultistFemale, 4, 6, 6);
-            AddSpawner(root, "Spawn_Hills_Marauders", new Vector2(4f, -46f), 30f, marauderMale, 5, 6, 4);
+            // The hill areas sit south-west of the crypt rather than on it. A spawn area
+            // finds its ground with a ray from above, and the crypt's roof is ground to a
+            // ray, so an area that covers the crypt stands cultists on its roof - where
+            // they cannot get down, and from where they cannot be reached.
+            AddSpawner(root, "Spawn_Hills", new Vector2(-14f, -58f), 24f, cultistFemale, 4, 6, 6);
+            AddSpawner(root, "Spawn_Hills_Marauders", new Vector2(-14f, -58f), 24f, marauderMale, 5, 6, 4);
             AddSpawner(root, "Spawn_Camp", DemoIslandBuilder.CampCentre, 16f, marauderFemale, 6, 8, 5);
             AddSpawner(root, "Spawn_Camp_Bandits", DemoIslandBuilder.CampCentre, 16f, banditFemale, 6, 8, 4);
         }
@@ -2616,6 +2943,18 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// </summary>
         private const float VillagePeace = 30f;
 
+        /// <summary>
+        /// The same for the crypt's doorstep, where players arrive coming up out of the
+        /// dungeon. Smaller: the crypt is a building and a rune ring, not a village, and
+        /// the cultists are meant to be found near it - just not standing on the ring.
+        /// Not too small, either: monsters wander a few metres out from where they are
+        /// spawned, and at ten a bandit from the outskirts area was on the doorstep
+        /// within a minute. A ray from above also reads the crypt's roof as ground, so
+        /// an area that reaches the crypt stands monsters on its roof, where they
+        /// cannot be fought.
+        /// </summary>
+        private const float CryptPeace = 16f;
+
         private static void AddSpawner(GameObject root, string name, Vector2 centre, float radius, MonsterCharacterEntity prefab, short minLevel, short maxLevel, int amount)
         {
             // Nothing may spawn within reach of where players arrive. A monster spawn area
@@ -2636,6 +2975,17 @@ namespace MultiplayerARPG.Demo.EditorTools
                 Vector2 moved = village + away * needed;
                 Debug.Log($"[{nameof(DemoSceneBuilder)}] {name} reached to within {(distance - radius):F0}m of the " +
                           $"village green, so it moved out to {needed:F0}m. Players have to be able to arrive.");
+                centre = moved;
+            }
+            Vector2 crypt = DemoIslandBuilder.CryptCentre;
+            distance = Vector2.Distance(centre, crypt);
+            needed = radius + CryptPeace;
+            if (distance < needed)
+            {
+                Vector2 away = distance > 0.01f ? (centre - crypt).normalized : Vector2.down;
+                Vector2 moved = crypt + away * needed;
+                Debug.Log($"[{nameof(DemoSceneBuilder)}] {name} reached to within {(distance - radius):F0}m of the " +
+                          $"crypt door, so it moved out to {needed:F0}m. Players come up out of it there.");
                 centre = moved;
             }
 
@@ -2669,9 +3019,14 @@ namespace MultiplayerARPG.Demo.EditorTools
         {
             var map = AssetDatabase.LoadAssetAtPath<BaseMapInfo>(
                 "Assets/OpenMMORPG/Demo/GameData/Resources/MapInfos/BaseMap.asset");
-            if (map == null)
-                return;
-            Vector3 arrival = new SerializedObject(map).FindProperty("startPosition").vector3Value;
+            if (map != null)
+                CheckClear(new SerializedObject(map).FindProperty("startPosition").vector3Value, "Players arrive");
+            // The same for anyone coming back up out of the crypt.
+            CheckClear(CryptArrivalWorld, "Players come up out of the crypt");
+        }
+
+        private static void CheckClear(Vector3 arrival, string who)
+        {
             // A character's own capsule: 0.3m across, 1.8m tall, standing on the spot.
             Collider[] blocking = Physics.OverlapCapsule(
                 arrival + Vector3.up * 0.3f, arrival + Vector3.up * 1.5f, 0.3f);
@@ -2682,7 +3037,7 @@ namespace MultiplayerARPG.Demo.EditorTools
                 names.Add(collider.transform.parent == null
                     ? collider.name
                     : collider.transform.parent.name + "/" + collider.name);
-            Debug.LogError($"[{nameof(DemoSceneBuilder)}] Players arrive at {arrival:F1} inside " +
+            Debug.LogError($"[{nameof(DemoSceneBuilder)}] {who} at {arrival:F1} inside " +
                            string.Join(", ", names.ToArray()) + ". They will be thrown out of it by the " +
                            "physics and die on arrival, and again on every respawn. Move the arrival " +
                            "point in DemoDatabaseWiring, or move whatever is standing on it.");
@@ -2701,7 +3056,7 @@ namespace MultiplayerARPG.Demo.EditorTools
         ///
         /// Occlusion culling assumes the same thing, so a mover gets no static flags at all.
         /// </summary>
-        private static void MarkStatic(GameObject root)
+        internal static void MarkStatic(GameObject root)
         {
             var moving = new System.Collections.Generic.HashSet<Transform>();
             foreach (MultiplayerARPG.Demo.DemoDoor door in root.GetComponentsInChildren<MultiplayerARPG.Demo.DemoDoor>(true))

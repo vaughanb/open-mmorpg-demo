@@ -27,10 +27,19 @@ Each step consumes the previous one's output, so run them in this order:
 8. `Open MMORPG > Demo > Build Character Entities`, then `Build Mounts`
 9. `Open MMORPG > Demo > Build Island Terrain`
 10. `Open MMORPG > Demo > Build Island Scene` (rewrites `DemoMap.unity`; the `Npcs` root is kept)
-11. `Open MMORPG > Demo > Build NPCs And Quests`
-12. `Open MMORPG > Demo > Wire Game Database`
-13. `Open MMORPG > Demo > Build Player Controller`
-14. `Open MMORPG > Demo > Collect Demo Art` — last, and after any rebuild: copies every
+11. `Open MMORPG > Demo > Build Dungeon Scene` (rewrites `DemoDungeon.unity`, the crypt under
+    the hills; also writes its map info and the `DungeonGate` warp entity)
+12. `Open MMORPG > Demo > Build NPCs And Quests`
+13. `Open MMORPG > Demo > Wire Game Database` (also opens the way between the island and the
+    crypt: the warp portal database, the map spawn list and the build settings)
+14. `Open MMORPG > Demo > Build Player Controller`
+14b. `Open MMORPG > Demo > Wire Audio` — hooks the clips under `Demo/Audio` up by file-name
+    family (Footstep*, SwordSwing*, ArrowFire*, ManHit*/WomanHit*, ...) to the character
+    entities, the horse, the character models and the weapon items, and logs the families
+    still missing. The entity, mount, model and item builders call the same code, so this
+    only needs rerunning when clips are added. The island's ambience beds are built with
+    the sea (`Rebuild Sea`).
+15. `Open MMORPG > Demo > Collect Demo Art` — last, and after any rebuild: copies every
     library asset the demo still references into `Demo/Art` (textures resampled, the
     animation clips extracted one by one) and rewrites the references, so the demo
     carries everything it uses. `Verify Demo Is Self-Contained` reports anything left
