@@ -1,4 +1,4 @@
-using MultiplayerARPG.GameData.Model.Playables;
+﻿using MultiplayerARPG.GameData.Model.Playables;
 using UnityEditor;
 using UnityEngine;
 
@@ -22,13 +22,16 @@ namespace MultiplayerARPG.Demo.EditorTools
         public const string LibraryPath = "Assets/Plugins/Quaternius/Animations/UAL1_Fixed.fbx";
 
         /// <summary>
-        /// Scanned after the library, so anything the Quaternius library does not cover can
-        /// simply be dropped in here. That is how the bow got real archery - see
-        /// <see cref="BuildRanged"/>. A name found in the library wins, so a clip added
-        /// here cannot silently shadow a library one. Inside the demo, because the demo
-        /// must carry everything it plays.
+        /// Every animation the demo owns, in one folder: the clips extracted from the
+        /// Quaternius library, the Mixamo downloads, and the bow shot generated here.
+        /// Anything the library does not cover can simply be dropped in.
+        ///
+        /// This used to be two places - extracted clips under `Demo/Art/Animations` with
+        /// the demo's own beside them in `Demo/Animations` - which meant neither folder
+        /// answered "where are the animations". It is the same folder as
+        /// <see cref="DemoArtCollector.ClipDir"/> now, and that is the point.
         /// </summary>
-        private const string ExtraAnimationDir = "Assets/OpenMMORPG/Demo/Animations";
+        private const string ExtraAnimationDir = DemoArtCollector.ClipDir;
 
         private const string WeaponTypeDir = "Assets/OpenMMORPG/Demo/GameData/Resources/WeaponTypes";
 
@@ -40,23 +43,94 @@ namespace MultiplayerARPG.Demo.EditorTools
 
         private static AnimationClip[] _clips;
 
+        /// <summary>
+        /// Clips the demo holds a character in that the library does not flag as looping.
+        ///
+        /// The library's convention is a `_Loop` suffix, and `Sword_Idle` does not have
+        /// one - but it is the idle for the whole sword and axe set, so a swordsman stands
+        /// in it indefinitely. An `AnimationClipPlayable` loops only if the clip itself
+        /// says to, so unflagged it plays its 1.67s once and then holds its last frame
+        /// forever. In game that hides behind every other state change; on the character
+        /// screens, where the character does nothing else, it is the whole of what you see.
+        ///
+        /// Safe to force: measured start against end across all 52 bones, `Sword_Idle`
+        /// closes on itself to 0.6 degrees, which is the same order as the clips the
+        /// library does flag (`Idle_Loop` 0.4, `Spell_Simple_Idle_Loop` 0.5). It is a
+        /// clean cycle that was simply never marked as one.
+        ///
+        /// Audited the other way too: of the 38 distinct clips the built models use in a
+        /// state that must loop, this is the only one missing the flag.
+        /// </summary>
+        private static readonly string[] MustLoop = { "Sword_Idle" };
+
+        /// <summary>
+        /// Sets the loop flag on <see cref="MustLoop"/>, at the library importer so every
+        /// future extraction inherits it, and on the already-extracted copy so the demo is
+        /// right without waiting for a re-collect.
+        /// </summary>
+        public static void EnsureLooping()
+        {
+            foreach (string name in MustLoop)
+            {
+                FixCollectedClip(name);
+                FixLibraryClip(name);
+            }
+        }
+
+        private static void FixCollectedClip(string name)
+        {
+            string path = $"{DemoArtCollector.ClipDir}/{name}.anim";
+            var clip = AssetDatabase.LoadAssetAtPath<AnimationClip>(path);
+            if (clip == null || clip.isLooping)
+                return;
+            AnimationClipSettings settings = AnimationUtility.GetAnimationClipSettings(clip);
+            settings.loopTime = true;
+            AnimationUtility.SetAnimationClipSettings(clip, settings);
+            EditorUtility.SetDirty(clip);
+            AssetDatabase.SaveAssetIfDirty(clip);
+            Debug.Log($"[{nameof(DemoAnimationSet)}] Set \"{name}\" to loop in {path}.");
+        }
+
+        private static void FixLibraryClip(string name)
+        {
+            var importer = AssetImporter.GetAtPath(LibraryPath) as ModelImporter;
+            if (importer == null)
+                return;
+            ModelImporterClipAnimation[] clips = importer.clipAnimations;
+            if (clips.Length == 0)
+                clips = importer.defaultClipAnimations;
+            bool changed = false;
+            foreach (ModelImporterClipAnimation clip in clips)
+            {
+                if (clip.name != name || clip.loopTime)
+                    continue;
+                clip.loopTime = true;
+                changed = true;
+            }
+            // Reimporting the library is slow - it is a 64MB file with 119 takes - so it
+            // only happens when something actually needs changing.
+            if (!changed)
+                return;
+            importer.clipAnimations = clips;
+            EditorUtility.SetDirty(importer);
+            importer.SaveAndReimport();
+            Debug.Log($"[{nameof(DemoAnimationSet)}] Set \"{name}\" to loop in {LibraryPath}.");
+        }
+
         public static AnimationClip Clip(string name)
         {
             if (_clips == null)
             {
                 var found = new System.Collections.Generic.List<AnimationClip>();
-                // The clips DemoArtCollector has already extracted into the demo come
-                // first, so a rebuilt character points at the demo's own copy and never
-                // back at the library; the library itself covers whatever is not yet
-                // extracted, and may be absent in a project that only has the demo.
-                if (AssetDatabase.IsValidFolder(DemoArtCollector.ClipDir))
-                {
-                    foreach (string guid in AssetDatabase.FindAssets("t:AnimationClip", new[] { DemoArtCollector.ClipDir }))
-                        CollectClips(AssetDatabase.GUIDToAssetPath(guid), found);
-                }
-                if (AssetDatabase.LoadAssetAtPath<Object>(LibraryPath) != null)
-                    CollectClips(LibraryPath, found);
-
+                // The demo's own folder first, so a rebuilt character points at the copy
+                // that ships and never back at the library. That matters beyond tidiness:
+                // the extracted copies carry hand edits the library does not have - the
+                // corrected stances, the loop flag on Sword_Idle - and a rebuild that
+                // resolved to the library would silently undo them.
+                //
+                // The library is scanned second and covers anything not yet extracted. It
+                // may be absent entirely in a project that only has the demo, which is the
+                // state the demo is meant to ship in.
                 if (AssetDatabase.IsValidFolder(ExtraAnimationDir))
                 {
                     foreach (string guid in AssetDatabase.FindAssets("t:AnimationClip", new[] { ExtraAnimationDir }))
@@ -64,6 +138,9 @@ namespace MultiplayerARPG.Demo.EditorTools
                     foreach (string guid in AssetDatabase.FindAssets("t:Model", new[] { ExtraAnimationDir }))
                         CollectClips(AssetDatabase.GUIDToAssetPath(guid), found);
                 }
+                if (AssetDatabase.LoadAssetAtPath<Object>(LibraryPath) != null)
+                    CollectClips(LibraryPath, found);
+
                 _clips = found.ToArray();
             }
 
@@ -337,6 +414,12 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// Whether this character can hold a shot before loosing it. Only a player can: the
         /// kit starts a charge from <c>ShooterPlayerCharacterController</c> and nowhere else,
         /// so monsters never do, however their weapon is set up.
+        ///
+        /// It is not enough on its own. A charge is only ever *started* for a weapon that
+        /// fires on release, which is what <see cref="DemoItemBuilder.BowsCharge"/> decides,
+        /// so the two have to agree: with charging off, a player wired for it would play the
+        /// release on its own and every shot would begin at full stretch - no draw, no string
+        /// to pull. <see cref="BuildRanged"/> is therefore given both, not just the first.
         /// </param>
         public static WeaponAnimations[] BuildWeaponAnimations(bool canCharge)
         {
@@ -352,7 +435,7 @@ namespace MultiplayerARPG.Demo.EditorTools
                         built.Add(BuildMagic(weaponType));
                         break;
                     case "Bow":
-                        built.Add(BuildRanged(weaponType, canCharge));
+                        built.Add(BuildRanged(weaponType, canCharge && DemoItemBuilder.BowsCharge));
                         break;
                     case "Unarmed":
                         // Left out on purpose. With no set of its own it falls through to
@@ -367,6 +450,98 @@ namespace MultiplayerARPG.Demo.EditorTools
                 Debug.LogError($"[{nameof(DemoAnimationSet)}] No weapon types under {WeaponTypeDir}, so every " +
                                "character will animate as though empty-handed. Run Build Items first.");
             return built.ToArray();
+        }
+
+        /// <summary>
+        /// One entry per skill that wants its own clip, which is most of them.
+        ///
+        /// This has to exist, and the reason is not obvious: the kit does NOT fall back
+        /// to the equipped weapon's `skillActivateAnimation` when a skill has no entry
+        /// here - <c>PlayableCharacterModel.GetSkillActivateAnimation</c> falls all the
+        /// way through to <c>defaultAnimations</c>, which in this demo is the unarmed set
+        /// and casts a spell. Left empty, every skill in the game plays
+        /// <c>Spell_Simple_Shoot</c>: the warrior cleaves by waving a hand, and the
+        /// archer looses an arrow the same way.
+        ///
+        /// The clips are hung on the weapon type rather than on the skill outright,
+        /// because that is the level the kit looks them up at and because it is true: a
+        /// Cleave is a sword's swing, and if a warrior ever picks up a staff it should
+        /// not be one.
+        /// </summary>
+        public static SkillAnimations[] BuildSkillAnimations()
+        {
+            var built = new System.Collections.Generic.List<SkillAnimations>();
+            foreach (DemoSkillBuilder.SkillSpec spec in DemoSkillBuilder.All())
+            {
+                BaseSkill skill = DemoSkillBuilder.Asset(spec.Name);
+                if (skill == null)
+                    continue;
+
+                var anims = new SkillAnimations { skill = skill };
+                // Everything the demo's skills need a weapon for names one, and the rest
+                // are the warrior's, which work with anything he can hold.
+                WeaponType weaponType = string.IsNullOrEmpty(spec.Weapon)
+                    ? null
+                    : AssetDatabase.LoadAssetAtPath<WeaponType>($"{WeaponTypeDir}/{spec.Weapon}.asset");
+
+                if (spec.Clip != null)
+                {
+                    ActionAnimation activate = Attack(spec.Clip, spec.Trigger, spec.ClipSpeed,
+                                                      DemoAudioWiring.SkillClips(spec.Name, spec.Audio));
+                    anims.activateAnimationType = SkillActivateAnimationType.UseActivateAnimation;
+                    anims.activateAnimation = activate;
+                    if (weaponType != null)
+                        anims.activateAnimationsByWeaponTypes = new[] { ForWeapon(weaponType, activate) };
+                }
+                else
+                {
+                    // The bow. Its shot is a generated clip whose trigger is measured off
+                    // the loose, so a skill that fired on any other frame would put the
+                    // arrow in the air while the string was still being drawn - and the
+                    // kit already has that animation, as the weapon's attack.
+                    anims.activateAnimationType = SkillActivateAnimationType.UseAttackAnimation;
+                }
+
+                if (spec.CastClip != null)
+                {
+                    ActionState cast = Action(spec.CastClip);
+                    anims.castState = cast;
+                    if (weaponType != null)
+                        anims.castStatesByWeaponTypes = new[] { ForWeapon(weaponType, cast) };
+                }
+
+                built.Add(anims);
+            }
+            return built.ToArray();
+        }
+
+        /// <summary>
+        /// The same animation, tagged with the weapon it belongs to. Copied field by
+        /// field rather than cast, because the kit's per-weapon types derive from the
+        /// plain ones rather than wrapping them.
+        /// </summary>
+        private static WeaponActionAnimation ForWeapon(WeaponType weaponType, ActionAnimation from)
+        {
+            return new WeaponActionAnimation
+            {
+                weaponType = weaponType,
+                state = from.state,
+                triggerDurationRates = from.triggerDurationRates,
+                durationType = from.durationType,
+                fixedDuration = from.fixedDuration,
+                extendDuration = from.extendDuration,
+                audioClips = from.audioClips,
+            };
+        }
+
+        private static WeaponActionState ForWeapon(WeaponType weaponType, ActionState from)
+        {
+            return new WeaponActionState
+            {
+                weaponType = weaponType,
+                clip = from.clip,
+                animSpeedRate = from.animSpeedRate,
+            };
         }
 
         /// <summary>One-handed melee: idle on guard, a single swing that connects mid-arc.</summary>
@@ -717,13 +892,25 @@ namespace MultiplayerARPG.Demo.EditorTools
             }
         }
 
-        /// <summary>Magic staff: the cast pose idles, and the shot is the ranged attack.</summary>
+        /// <summary>
+        /// Magic staff: the mage's own idle, and the shot is the ranged attack.
+        ///
+        /// The idle is <c>Mage_Idle</c>, authored for this demo and living in
+        /// <see cref="DemoArtCollector.ClipDir"/> rather than in the library - the first
+        /// hand-made clip the staff set uses. It replaced the library's
+        /// <c>Spell_Simple_Idle_Loop</c>, which is still the **cast** pose in
+        /// <see cref="BuildDefault"/> and is left alone there.
+        ///
+        /// Keyed off the weapon, not the class, because that is the only thing the kit's
+        /// animation sets know about: anyone holding a staff stands like this, and in this
+        /// demo that is the mage.
+        /// </summary>
         public static WeaponAnimations BuildMagic(WeaponType weaponType)
         {
             return new WeaponAnimations
             {
                 weaponType = weaponType,
-                idleState = State("Spell_Simple_Idle_Loop"),
+                idleState = State("Mage_Idle"),
                 moveStates = JogMoves(),
                 sprintStates = SprintMoves(),
                 walkStates = Moves("Walk_Loop"),

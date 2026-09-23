@@ -81,6 +81,7 @@ namespace MultiplayerARPG.Demo.EditorTools
                 FollowCameraControls gameplayCamera = Camera("GameplayCamera");
                 ConfigureCollision(gameplayCamera);
                 ConfigureZoom(gameplayCamera);
+                ConfigureUnderwater(gameplayCamera);
 
                 var serialized = new SerializedObject(controller);
                 Set(serialized, "gameplayCameraPrefab", gameplayCamera);
@@ -245,6 +246,7 @@ namespace MultiplayerARPG.Demo.EditorTools
             var serialized = new SerializedObject(controller);
             FollowCameraControls gameplayCamera = Camera("GameplayCamera");
             ConfigureCollision(gameplayCamera);
+            ConfigureUnderwater(gameplayCamera);
             Set(serialized, "gameplayCameraPrefab", gameplayCamera);
             Set(serialized, "minimapCameraPrefab", Camera("MinimapCamera"));
             serialized.FindProperty("crosshairRect").objectReferenceValue = crosshair;
@@ -300,6 +302,61 @@ namespace MultiplayerARPG.Demo.EditorTools
             serialized.FindProperty("wallHitLayerMask").intValue = mask;
             serialized.ApplyModifiedPropertiesWithoutUndo();
             EditorUtility.SetDirty(camera);
+            AssetDatabase.SaveAssets();
+        }
+
+
+        private const string UnderwaterMaterialPath =
+            "Assets/OpenMMORPG/Demo/Materials/Underwater.mat";
+
+        /// <summary>
+        /// Puts <see cref="MultiplayerARPG.Demo.DemoUnderwater"/> on the gameplay camera,
+        /// with the material it tints the screen through.
+        ///
+        /// **The material has to exist as an asset.** The component could find the shader
+        /// by name and make one at runtime, and it would work in the editor and then draw
+        /// nothing in a build: a shader that nothing references by asset is not included
+        /// in the player, and `Shader.Find` returns null for it. A material asset is the
+        /// reference that pulls it in.
+        ///
+        /// A material already on the right shader is left alone, the same rule the sea
+        /// material follows, so the underwater colour can be tuned in the inspector
+        /// without a rebuild putting it back.
+        /// </summary>
+        private static void ConfigureUnderwater(FollowCameraControls camera)
+        {
+            if (camera == null)
+                return;
+
+            Shader shader = Shader.Find("Demo/Underwater");
+            if (shader == null)
+            {
+                Debug.LogError($"[{nameof(DemoControllerBuilder)}] Demo/Underwater is missing; " +
+                               "the camera will not tint under water.");
+                return;
+            }
+
+            Material tint = AssetDatabase.LoadAssetAtPath<Material>(UnderwaterMaterialPath);
+            if (tint == null || tint.shader != shader)
+            {
+                AssetDatabase.DeleteAsset(UnderwaterMaterialPath);
+                DemoItemBuilder.EnsureFolder(
+                    System.IO.Path.GetDirectoryName(UnderwaterMaterialPath).Replace('\\', '/'));
+                tint = new Material(shader);
+                AssetDatabase.CreateAsset(tint, UnderwaterMaterialPath);
+            }
+
+            GameObject go = camera.gameObject;
+            var underwater = go.GetComponent<MultiplayerARPG.Demo.DemoUnderwater>();
+            if (underwater == null)
+                underwater = go.AddComponent<MultiplayerARPG.Demo.DemoUnderwater>();
+            underwater.overlayMaterial = tint;
+            // Whichever clip the Underwater family holds, or none - the fog and the tint
+            // work without it, and Wire Audio reports the family as missing.
+            AudioClip[] loop = DemoAudioWiring.Clips(DemoAudioWiring.Underwater);
+            underwater.underwaterLoop = loop.Length > 0 ? loop[0] : null;
+            EditorUtility.SetDirty(underwater);
+            EditorUtility.SetDirty(go);
             AssetDatabase.SaveAssets();
         }
 

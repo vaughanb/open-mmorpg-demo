@@ -506,6 +506,16 @@ namespace MultiplayerARPG.Demo.EditorTools
             {
                 var manager = contents.GetComponent<CharacterModelManager>();
                 BaseCharacterModel main = manager != null ? manager.MainTpsModel : null;
+                if (main == null && manager != null)
+                {
+                    // A nested prefab's component is referenced through a stripped entry that
+                    // records its script; swapping the body's script (EnsureDemoCharacterModel
+                    // below, on a body built before it existed) leaves that entry stale and
+                    // the reference reads null until this prefab is saved again. Re-point it.
+                    Transform model = contents.transform.Find("Model");
+                    main = model != null ? model.GetComponent<BaseCharacterModel>() : null;
+                    manager.MainTpsModel = main;
+                }
                 if (main == null)
                 {
                     Debug.LogError($"[{nameof(DemoMountBuilder)}] \"{playerEntityPath}\" has no main TPS model.");
@@ -517,11 +527,21 @@ namespace MultiplayerARPG.Demo.EditorTools
                 if (existing != null)
                     Object.DestroyImmediate(existing.gameObject);
 
+                // The rider is a second copy of the body with its own skeleton, and the kit
+                // dresses a seat model through the *main* model's containers - so with the
+                // stock model class the rider sat on the horse in its bare default look while
+                // its gear went onto the hidden body. DemoCharacterModel claims its own
+                // containers when switched to; make sure the body prefab carries it.
+                if (!DemoCharacterBuilder.EnsureDemoCharacterModel(riderModelPath))
+                {
+                    Debug.LogError($"[{nameof(DemoMountBuilder)}] Missing \"{riderModelPath}\"; run Build Character Models first.");
+                    return;
+                }
                 var modelPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(riderModelPath);
                 var riding = (GameObject)PrefabUtility.InstantiatePrefab(modelPrefab, contents.transform);
                 riding.name = RiderModelName;
                 riding.transform.SetParent(contents.transform, false);
-                var ridingModel = riding.GetComponent<PlayableCharacterModel>();
+                var ridingModel = riding.GetComponent<DemoCharacterModel>();
 
                 ridingModel.defaultAnimations = RidingAnimations();
                 // Opens the legs after the animator has posed them; the clip itself cannot

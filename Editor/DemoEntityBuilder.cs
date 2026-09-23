@@ -27,6 +27,28 @@ namespace MultiplayerARPG.Demo.EditorTools
         private const string PlayerTemplate = EntityDir + "/BaseCharacter.prefab";
         private const string EnemyTemplate = EntityDir + "/BaseEnemy.prefab";
 
+        /// <summary>
+        /// How long a dead monster lies there, and how long its loot lasts. **One number for both**
+        /// - `DemoNpcBuilder` writes it to `GameInstance.monsterCorpseAppearDuration` as well.
+        ///
+        /// The kit ships them wildly apart: the body is destroyed after `destroyDelay` of **2
+        /// seconds** while the loot container it spawns lives for `monsterCorpseAppearDuration`,
+        /// **60**. So the corpse blinked out two seconds after the kill and left a sack glittering
+        /// on the grass for a minute - which is what it looks like, and is also what put a
+        /// destroyed entity under the player's cursor long enough to trip the interface-null bug
+        /// in `DemoPlayerController`.
+        ///
+        /// **They cannot simply both be 60**, because the kit couples the body to the respawn:
+        /// `RespawnRoutine(DestroyDelay + DestroyRespawnDelay)`. A minute-long body means a
+        /// minute-long wait for the monster to come back, on an island small enough to clear.
+        /// 30 seconds is long enough to finish a fight and walk over to loot, and puts the
+        /// monster back 35 seconds after it died rather than 7.
+        /// </summary>
+        internal const float CorpseLifetime = 30f;
+
+        /// <summary>Added to <see cref="CorpseLifetime"/> to give the respawn delay.</summary>
+        internal const float RespawnAfterBody = 5f;
+
         // The Quaternius characters stand about 1.75m, so the placeholder capsule's
         // 0.5m radius is far too wide for them - they would not fit between the
         // village buildings.
@@ -66,6 +88,11 @@ namespace MultiplayerARPG.Demo.EditorTools
             BuildNpc($"{ModelDir}/KeeperModel_Male.prefab", $"{EntityDir}/DemoKeeper.prefab");
             // The alehouse keeper: the other villager body, so she is not Marek's twin.
             BuildNpc($"{ModelDir}/VillagerModel_Female.prefab", $"{EntityDir}/DemoInnkeeper.prefab");
+            // The smith, who repairs, refines and breaks down gear at the anvil in House_2.
+            // Empty-handed: `armedWith` takes *items*, and the pack's hammers are props with
+            // no item behind them, while putting a sword in his hand would read as a guard
+            // standing at an anvil. The anvil he is standing at does the work instead.
+            BuildNpc($"{ModelDir}/SmithModel_Male.prefab", $"{EntityDir}/DemoSmith.prefab");
             // The guards, sword and shield in hand: one stands the watchtower deck, the
             // other walks the green and needs to be able to move.
             string[] guardArms = { "IronLongsword", "PaintedRoundShield" };
@@ -124,10 +151,28 @@ namespace MultiplayerARPG.Demo.EditorTools
             var model3d = modelInstance.GetComponent<PlayableCharacterModel>();
             if (model3d != null)
             {
+                WireModelRenderer(modelInstance, model3d);
+
                 CharacterModelManager manager = entity.GetComponent<CharacterModelManager>();
                 if (manager == null)
                     manager = entity.AddComponent<CharacterModelManager>();
                 manager.MainTpsModel = model3d;
+
+                // And the entity's OWN model field, which is what actually animates it.
+                //
+                // `BaseGameEntity.EntityUpdate` drives the model from the movement state,
+                // but only `if (Model != null)` - and for an NPC `Model` is the serialized
+                // field below, filled by `InitialRequiredComponents` with
+                // `GetComponent<GameEntityModel>()`. That is GetComponent, not
+                // GetComponentInChildren, and the model sits on the child "Model" object,
+                // so it finds nothing and every NPC stands frozen: the idles never play and
+                // a patrolling guard slides along the path without moving his legs.
+                //
+                // Characters do not hit this because `BaseCharacterEntity` overrides `Model`
+                // to return `ModelManager.ActiveTpsModel` and ignores the field entirely.
+                // Setting the manager above is therefore not enough on its own.
+                serialized.FindProperty("model").objectReferenceValue = model3d;
+                serialized.ApplyModifiedPropertiesWithoutUndo();
             }
 
             if (armedWith != null)
@@ -139,8 +184,9 @@ namespace MultiplayerARPG.Demo.EditorTools
             if (patrols)
             {
                 // The kit's navmesh mover, the same one its monsters walk on, driven by
-                // a demo component that hands it one point of a loop at a time. The
-                // base entity animates its model from the movement state on its own.
+                // a demo component that hands it one point of a loop at a time. The base
+                // entity animates the model from the movement state — but only once the
+                // entity's `model` field is set, which is done above.
                 entity.AddComponent<NavMeshEntityMovement>();
                 NavMeshAgent agent = entity.GetComponent<NavMeshAgent>();
                 agent.height = CharacterHeight;
@@ -200,6 +246,54 @@ namespace MultiplayerARPG.Demo.EditorTools
             held.transform.localEulerAngles = model.FindPropertyRelative("localEulerAngles").vector3Value;
             Vector3 scale = model.FindPropertyRelative("localScale").vector3Value;
             held.transform.localScale = scale == Vector3.zero ? Vector3.one : scale;
+        }
+
+        /// <summary>
+        /// Gives an animal's model its animator and its renderer, and stops the animator
+        /// being culled.
+        ///
+        /// **Without this a wolf is invisible while it is still biting you.** A
+        /// `SkinnedMeshRenderer` is culled against bounds derived from its bones, and those
+        /// bounds only move when something drives the skeleton. With `animator` unset the
+        /// model's playable graph never takes the animator over, so the bones stay where the
+        /// bind pose left them, the bounds stay a box round the origin, and Unity frustum
+        /// culls a wolf that is standing in front of you. The entity is perfectly alive
+        /// underneath: it closes, it attacks, the hit effects and the damage arrive, and
+        /// there is nothing on screen to click on, because the collider that would be hit
+        /// rides the same unmoved skeleton.
+        ///
+        /// `DemoCharacterBuilder` has always done this for the people. The animals go
+        /// through this builder instead and were never given the same treatment, so the
+        /// wolf, the deer and the dog have been shipping with `animator` and
+        /// `skinnedMeshRenderer` null.
+        ///
+        /// `AlwaysAnimate` for the same reason it is set on the characters: the server
+        /// drives combat from animation timing, so an attack animated while culled would
+        /// never land its hit.
+        /// </summary>
+        private static void WireModelRenderer(GameObject modelInstance, PlayableCharacterModel model)
+        {
+            var animator = modelInstance.GetComponent<Animator>();
+            if (animator != null)
+            {
+                animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
+                model.animator = animator;
+            }
+            else
+            {
+                Debug.LogWarning($"[{nameof(DemoEntityBuilder)}] \"{modelInstance.name}\" has no Animator; " +
+                                 "its model cannot be driven and it will be culled where it stands.");
+            }
+
+            // The first skinned renderer under the model. Animals are a single mesh, so
+            // there is nothing to choose between - unlike a character, where the bone map is
+            // read off a renderer that has to carry the whole skeleton.
+            var renderer = modelInstance.GetComponentInChildren<SkinnedMeshRenderer>(true);
+            if (renderer != null)
+                model.skinnedMeshRenderer = renderer;
+            else
+                Debug.LogWarning($"[{nameof(DemoEntityBuilder)}] \"{modelInstance.name}\" has no " +
+                                 "SkinnedMeshRenderer.");
         }
 
         /// <summary>The transform a character model equips a socket's items under.</summary>
@@ -344,6 +438,16 @@ namespace MultiplayerARPG.Demo.EditorTools
                 {
                     var serialized = new SerializedObject(monster);
                     serialized.FindProperty("characterDatabase").objectReferenceValue = MonsterData(monsterData);
+                    // Clear the template's own title, or it shadows the one on the data
+                    // asset: `BaseGameEntity.Title` prefers `entityTitle` when it is set,
+                    // and the kit's template ships it as the literal word "Enemy". Every
+                    // bandit, marauder and cultist in the demo wore that one nameplate
+                    // until 2026-09-15 — the three families were indistinguishable at a
+                    // glance, and the deer would have been labelled an enemy too.
+                    serialized.FindProperty("entityTitle").stringValue = string.Empty;
+                    // The body lies there as long as its loot does - see CorpseLifetime.
+                    serialized.FindProperty("destroyDelay").floatValue = CorpseLifetime;
+                    serialized.FindProperty("destroyRespawnDelay").floatValue = RespawnAfterBody;
                     serialized.ApplyModifiedPropertiesWithoutUndo();
                 }
             }

@@ -1,4 +1,4 @@
-using Unity.AI.Navigation;
+﻿using Unity.AI.Navigation;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
@@ -24,14 +24,86 @@ namespace MultiplayerARPG.Demo.EditorTools
         public const string ScenePath = "Assets/OpenMMORPG/Demo/Scenes/DemoMap.unity";
 
         /// <summary>
-        /// The roots a rebuild keeps. The NPCs and the horse are scene objects placed
-        /// by DemoNpcBuilder and DemoMountBuilder and then moved about by hand in the
-        /// editor, which is the point of having them in the scene at all - so they are
-        /// not the generator's to wipe.
+        /// The entity roots a regenerate keeps. The NPCs, the horse and the animals are
+        /// scene objects placed by DemoNpcBuilder, DemoMountBuilder and DemoWildlifeBuilder
+        /// and then moved about by hand in the editor, which is the point of having them in
+        /// the scene at all - so they are not the generator's to wipe.
         /// </summary>
         public const string NpcRootName = "Npcs";
         public const string MountRootName = "Mounts";
-        public static readonly string[] KeptRootNames = { NpcRootName, MountRootName };
+        public const string WildlifeRootName = "Wildlife";
+
+        /// <summary>
+        /// Where hand-placed work lives. Nothing under a root of this name is ever built,
+        /// moved or destroyed by a generator, in any demo scene - park a prop here and a
+        /// regenerate leaves it exactly where you put it. That is the whole contract: the
+        /// generators own the scene apart from this one root, and you own this one.
+        ///
+        /// Unlike the entity roots it stays switched **on** for the navmesh bake, so a rock
+        /// dropped in blocks the path and a plank laid down carries one, which is what you
+        /// would expect of scenery. Hand-placed *characters* belong under
+        /// <see cref="NpcRootName"/>, which is kept too and does come out of the bake.
+        /// </summary>
+        public const string AuthoredRootName = "Authored";
+
+        /// <summary>
+        /// The resurrection shrines, written by DemoShrineBuilder.
+        ///
+        /// Kept through a regenerate like the entity roots - a shrine can be nudged by hand
+        /// and keeps the nudge - but **not** taken out of the navmesh bake, because a shrine
+        /// is masonry and does not move. That is the distinction <see cref="MovableRootNames"/>
+        /// exists to draw: an NPC standing on the ground would carve a hole where it stands,
+        /// and an arch standing on the ground is supposed to.
+        /// </summary>
+        public const string ShrineRootName = "Shrines";
+
+        /// <summary>
+        /// The safe areas, written by DemoSundriesBuilder.
+        ///
+        /// Kept through a regenerate, and deliberately **not** in
+        /// <see cref="MovableRootNames"/>: a safe area is a trigger with no renderer, and
+        /// Unity's navmesh builder skips trigger colliders, so there is nothing here for a
+        /// bake to carve. Switching it off would be work that changes nothing.
+        /// </summary>
+        public const string SafeAreaRootName = "SafeAreas";
+
+        /// <summary>
+        /// The roots holding things that stand on the ground and move, and so have to be
+        /// switched off around a navmesh bake or each one carves a hole where it stands.
+        /// A subset of <see cref="KeptRootNames"/>: surviving the wipe and surviving the
+        /// bake are two different questions, and the Authored root answers them differently.
+        /// </summary>
+        public static readonly string[] MovableRootNames = { NpcRootName, MountRootName, WildlifeRootName };
+
+        /// <summary>
+        /// The settled areas, which a regenerate no longer builds over. Their generators
+        /// are finished: the village layout and its measured interiors, the bandit camp,
+        /// the crypt's surface entrance and the cliffs have not changed in rule for a long
+        /// time, and what happens to them now is hand-tuning in the editor. So the scene is
+        /// their source of truth and the code below is the record of how they were made -
+        /// still runnable, and run when the root is missing, but no longer run *over* a
+        /// root that is already there.
+        ///
+        /// `Regenerate Settled Areas` is the way back: it destroys these four and builds
+        /// them again from the rules. That is also the item to run after changing one of
+        /// their generators, because a full regenerate will not do it any more.
+        ///
+        /// One thing that does not follow the freeze: the scatter keeps off the houses by
+        /// asking <see cref="InsideBuilding"/>, which reads the constant `HouseLayout`
+        /// rather than the scene. Move a house far by hand and a later regenerate can
+        /// scatter rocks through where it now stands - move the layout constant with it,
+        /// or keep the move small.
+        /// </summary>
+        public const string VillageRootName = "Village";
+        public const string CampRootName = "BanditCamp";
+        public const string CryptRootName = "Crypt";
+        public const string CliffsRootName = "Cliffs";
+        public static readonly string[] FrozenAreaRootNames =
+            { VillageRootName, CampRootName, CryptRootName, CliffsRootName };
+
+        /// <summary>Every root a regenerate leaves alone.</summary>
+        public static readonly string[] KeptRootNames =
+            { NpcRootName, MountRootName, WildlifeRootName, AuthoredRootName, ShrineRootName, SafeAreaRootName };
         private const string NatureDir = "Assets/Plugins/Quaternius/Nature/Prefabs";
         private const string PropDir = "Assets/Plugins/Quaternius/Props/Models";
         private const string EntityDir = "Assets/OpenMMORPG/Demo/Prefabs/GamePlay/CharacterEntities";
@@ -124,17 +196,28 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// </summary>
         public const float LitterHeight = 0.35f;
 
-        [MenuItem("Open MMORPG/Demo/Build Island Scene")]
+        [MenuItem("Open MMORPG/Demo/Regenerate Island Scene (destroys hand edits)")]
         public static void Build()
         {
             Scene scene = EditorSceneManager.OpenScene(ScenePath, OpenSceneMode.Single);
 
-            var kept = new System.Collections.Generic.List<GameObject>();
+            var hidden = new System.Collections.Generic.List<GameObject>();
+            var standing = new System.Collections.Generic.HashSet<string>();
             foreach (GameObject root in scene.GetRootGameObjects())
             {
                 if (System.Array.IndexOf(KeptRootNames, root.name) >= 0)
                 {
-                    kept.Add(root);
+                    // Kept either way. Only the roots that move come out of the bake below;
+                    // anything under Authored is scenery and stays in it.
+                    if (System.Array.IndexOf(MovableRootNames, root.name) >= 0 && root.activeSelf)
+                        hidden.Add(root);
+                    continue;
+                }
+                // A settled area that is already standing is left exactly as it is, and its
+                // builder is skipped below. See FrozenAreaRootNames.
+                if (System.Array.IndexOf(FrozenAreaRootNames, root.name) >= 0)
+                {
+                    standing.Add(root.name);
                     continue;
                 }
                 Object.DestroyImmediate(root);
@@ -146,10 +229,7 @@ namespace MultiplayerARPG.Demo.EditorTools
             DemoFlameBuilder.Build();
             GameObject terrain = BuildTerrain(scene);
             BuildSea(scene);
-            BuildVillage(scene);
-            BuildCamp(scene);
-            BuildCrypt(scene);
-            BuildCliffs(scene);
+            BuildSettledAreas(scene, standing);
             System.Collections.Generic.List<Vector3> boulders = BuildNature(scene);
             BuildSpawners(scene);
             BuildHarvestNodes(scene, boulders);
@@ -162,13 +242,18 @@ namespace MultiplayerARPG.Demo.EditorTools
             // triggers, but the layer is masked out as well so it can never read as a
             // floor at sea level.
             surface.layerMask &= ~(1 << PhysicLayers.Water);
+            // And the sea floor is taken out of the walkable ground, so that nothing
+            // which walks wanders, chases or bolts into the water.
+            EnsureSeaCarve(terrain);
+            // A bench seat is walkable ground to a bake unless it is told otherwise.
+            MarkFurnitureUnwalkable(scene);
             // The NPCs and the horse stand on the green with a capsule each, which the
             // bake would read as a post and cut a hole round. They are not part of the
             // ground, and they move.
-            foreach (GameObject root in kept)
+            foreach (GameObject root in hidden)
                 root.SetActive(false);
             BakeWithDoorsOpen(surface);
-            foreach (GameObject root in kept)
+            foreach (GameObject root in hidden)
                 root.SetActive(true);
 
             CheckArrivalIsClear();
@@ -176,6 +261,64 @@ namespace MultiplayerARPG.Demo.EditorTools
             EditorSceneManager.MarkSceneDirty(scene);
             EditorSceneManager.SaveScene(scene);
             Debug.Log($"[{nameof(DemoSceneBuilder)}] Built {ScenePath}.");
+        }
+
+        /// <summary>
+        /// Builds each settled area that is not already standing, and says which ones it
+        /// left alone. Shared by the full regenerate and by `Regenerate Settled Areas`,
+        /// which passes an empty set so that all four are built again.
+        /// </summary>
+        private static void BuildSettledAreas(Scene scene, System.Collections.Generic.HashSet<string> standing)
+        {
+            if (!standing.Contains(VillageRootName))
+                BuildVillage(scene);
+            if (!standing.Contains(CampRootName))
+                BuildCamp(scene);
+            if (!standing.Contains(CryptRootName))
+                BuildCrypt(scene);
+            if (!standing.Contains(CliffsRootName))
+                BuildCliffs(scene);
+
+            if (standing.Count == 0)
+                return;
+            Debug.Log($"[{nameof(DemoSceneBuilder)}] Kept {standing.Count} settled area(s) as they stand: " +
+                      $"{string.Join(", ", standing)}. Their generators are finished and the scene is the " +
+                      "source of truth for them - run Regenerate Settled Areas to build them from the rules again.");
+        }
+
+        /// <summary>
+        /// Throws away the settled areas and builds all four from the rules, on the scene
+        /// that is already there. The way back from the freeze described on
+        /// <see cref="FrozenAreaRootNames"/>.
+        ///
+        /// Rebakes the navmesh afterwards: moving a wall the player walks past without
+        /// rebaking leaves them walking through it, or into thin air where it used to be.
+        /// </summary>
+        [MenuItem("Open MMORPG/Demo/Regenerate Settled Areas (village, camp, crypt, cliffs)", priority = 112)]
+        public static void RegenerateSettledAreas()
+        {
+            Scene scene = EditorSceneManager.OpenScene(ScenePath, OpenSceneMode.Single);
+
+            int removed = 0;
+            foreach (GameObject root in scene.GetRootGameObjects())
+            {
+                if (System.Array.IndexOf(FrozenAreaRootNames, root.name) < 0)
+                    continue;
+                Object.DestroyImmediate(root);
+                ++removed;
+            }
+
+            // The torches these areas place are instances of the flame prefabs, so the
+            // prefabs have to exist before the areas are built - the same order a full
+            // regenerate uses.
+            DemoFlameBuilder.Build();
+            BuildSettledAreas(scene, new System.Collections.Generic.HashSet<string>());
+
+            EditorSceneManager.MarkSceneDirty(scene);
+            EditorSceneManager.SaveScene(scene);
+            Debug.Log($"[{nameof(DemoSceneBuilder)}] Rebuilt the settled areas in {ScenePath} " +
+                      $"({removed} root(s) replaced). Rebaking the navmesh over them now.");
+            RebakeNavMesh();
         }
 
         private static GameObject Root(Scene scene, string name)
@@ -610,24 +753,126 @@ namespace MultiplayerARPG.Demo.EditorTools
         }
 
         /// <summary>
-        /// The island's two ambience beds, under the sea root so `Rebuild Sea` renews
-        /// them: the nature loop everywhere, and the waves loud on the beach and a murmur
-        /// on the hill. Each is a 2D loop driven by <see cref="MultiplayerARPG.Demo.DemoAmbientLoop"/>,
-        /// which follows the ambient volume setting. A bed whose clip is not provided yet
-        /// is simply not built; DemoAudioWiring lists what is missing.
+        /// The island's two ambience beds and its music, under the sea root so `Rebuild Sea` renews
+        /// them: the nature loop everywhere, and the waves loud on the beach, half-heard in
+        /// the village and a murmur in the middle of the island. Each is a 2D loop driven by
+        /// <see cref="MultiplayerARPG.Demo.DemoAmbientLoop"/>, which follows the ambient
+        /// volume setting. A bed whose clip is not provided yet is simply not built;
+        /// DemoAudioWiring lists what is missing.
+        ///
+        /// The waves fade by **distance from the waterline**, traced off the terrain at
+        /// runtime, with the height rule kept for the hills. Height on its own did not
+        /// do it: the island is a plateau at 3.5-7.5 m with the beach at 1.5 m, so a fade
+        /// keyed to height left the village at seven tenths of the beach's volume and the
+        /// sea sounded the same everywhere. The numbers here are set against the island's
+        /// layout - village centre 43 m from the coast, camp 26 m, crypt 48 m, the middle
+        /// 76 m - so the village hears roughly four tenths, the camp two thirds, and the
+        /// interior the floor.
         /// </summary>
         private static void BuildAmbience(GameObject sea)
         {
             var root = new GameObject("Ambience");
             root.transform.SetParent(sea.transform, false);
             AmbientBed(root, "Nature", DemoAudioWiring.Clips(DemoAudioWiring.AmbientNature), 0.5f, false);
-            AmbientBed(root, "Shore", DemoAudioWiring.Clips(DemoAudioWiring.OceanWaves), 0.8f, true);
+            MultiplayerARPG.Demo.DemoAmbientLoop shore = AmbientBed(root, "Shore", DemoAudioWiring.Clips(DemoAudioWiring.OceanWaves), 0.8f, true);
+            if (shore != null)
+            {
+                shore.fadeWithShoreDistance = true;
+                shore.fullWithinShoreDistance = ShoreFullWithin;
+                shore.quietBeyondShoreDistance = ShoreQuietBeyond;
+                shore.shoreQuietVolume = ShoreQuietVolume;
+                shore.fullBelowHeight = ShoreFullBelowHeight;
+                shore.quietAboveHeight = ShoreQuietAboveHeight;
+                shore.quietVolume = ShoreHeightQuietVolume;
+            }
+            BuildMusic(root);
         }
 
-        private static void AmbientBed(GameObject parent, string name, AudioClip[] clips, float volume, bool fadeWithHeight)
+        /// <summary>Metres inland from the waterline over which the waves are at full volume: the beach.</summary>
+        private const float ShoreFullWithin = 8f;
+        /// <summary>Metres inland by which the waves are down to <see cref="ShoreQuietVolume"/>.</summary>
+        private const float ShoreQuietBeyond = 60f;
+        /// <summary>The waves' volume deep inland; not silence, the island is only 110 m across.</summary>
+        private const float ShoreQuietVolume = 0.1f;
+        /// <summary>
+        /// The height rule's thresholds, set above the plateau (village 5.5 m, camp 7.5 m)
+        /// so it only bites on the hills and the crypt's rise, and above the beach-cliff
+        /// tops rather than on them.
+        /// </summary>
+        private const float ShoreFullBelowHeight = 8f;
+        private const float ShoreQuietAboveHeight = 24f;
+        private const float ShoreHeightQuietVolume = 0.4f;
+
+        /// <summary>
+        /// The island's music, on the schedule world music runs on in an MMO.
+        ///
+        /// It sits with the ambience because it is renewed the same way and belongs to the
+        /// same layer of the mix, but it is not an ambience bed - it follows the **BGM**
+        /// setting, not the ambient one, and it is silent most of the time.
+        ///
+        /// Three things make it world music rather than a soundtrack:
+        ///
+        /// **It greets you.** A piece plays <see cref="LoginDelay"/> seconds after the
+        /// character is in the world, which is what every MMO does on zoning in: the world
+        /// is drawn, the ambience is up, and then the zone announces itself. The delay is
+        /// short but not zero - starting on the same frame the player appears puts the music
+        /// under the tail of the loading screen, where it is heard as part of the interface
+        /// rather than as part of the island. The clock starts from the **listener**
+        /// appearing, not from the scene loading, and on a map scene the listener arrives
+        /// with the player - so this is timed from logging in, not from the level streaming.
+        ///
+        /// **Then it leaves you alone.** <see cref="GapMin"/> to <see cref="GapMax"/>
+        /// seconds of silence between plays, so the ambience beds carry the island most of
+        /// the time and the music is an event when it returns. A single piece looping over
+        /// an island this size would be wallpaper inside an hour.
+        ///
+        /// **And it does not follow a running order.** With more than one island track,
+        /// <see cref="MultiplayerARPG.Demo.DemoMusicPlayer"/> picks at random and never
+        /// repeats the piece it just played.
+        /// </summary>
+        private static void BuildMusic(GameObject parent)
+        {
+            AudioClip[] tracks = DemoAudioWiring.MusicClips(DemoAudioWiring.IslandMusic);
+            if (tracks.Length == 0)
+                return;
+            var go = new GameObject("Music");
+            go.transform.SetParent(parent.transform, false);
+            var source = go.AddComponent<AudioSource>();
+            source.playOnAwake = false;
+            source.spatialBlend = 0f;
+            source.volume = 0f;
+            var music = go.AddComponent<MultiplayerARPG.Demo.DemoMusicPlayer>();
+            music.tracks = tracks;
+            music.mode = MultiplayerARPG.Demo.DemoMusicPlayer.PlayMode.Occasional;
+            music.volume = DemoAudioWiring.IslandMusicVolume;
+            music.firstGapMin = LoginDelay;
+            music.firstGapMax = LoginDelay;
+            music.gapMin = GapMin;
+            music.gapMax = GapMax;
+        }
+
+        /// <summary>
+        /// How long after the character reaches the island its music starts.
+        ///
+        /// Fixed rather than a range: this one is a cue, not a shuffle, and the same beat
+        /// every login is what makes it read as the island greeting you. Eight seconds plus
+        /// the player's own fade in is long enough for the loading screen to be gone and the
+        /// ambience to have established the place first.
+        /// </summary>
+        private const float LoginDelay = 8f;
+
+        /// <summary>
+        /// The silence between plays afterwards - a few minutes, the range MMO zone music
+        /// sits in. Long enough that the island is mostly its own ambience, short enough
+        /// that a session hears the piece more than once.
+        /// </summary>
+        private const float GapMin = 120f;
+        private const float GapMax = 300f;
+
+        private static MultiplayerARPG.Demo.DemoAmbientLoop AmbientBed(GameObject parent, string name, AudioClip[] clips, float volume, bool fadeWithHeight)
         {
             if (clips.Length == 0)
-                return;
+                return null;
             var go = new GameObject(name);
             go.transform.SetParent(parent.transform, false);
             var source = go.AddComponent<AudioSource>();
@@ -640,6 +885,7 @@ namespace MultiplayerARPG.Demo.EditorTools
             loop.baseVolume = volume;
             loop.fadeWithHeight = fadeWithHeight;
             loop.seaLevel = DemoIslandBuilder.WaterLevel;
+            return loop;
         }
 
         /// <summary>
@@ -694,6 +940,293 @@ namespace MultiplayerARPG.Demo.EditorTools
         }
 
         /// <summary>
+        /// Bakes the island's navmesh on the scene as it stands, without rebuilding it.
+        ///
+        /// `Regenerate Island Scene` bakes as its last step, but it also **rewrites
+        /// `DemoMap.unity` from nothing**, which is far too much to run when all that is
+        /// wrong is the navmesh. This is the same bake, on the scene that is already
+        /// there.
+        ///
+        /// Worth knowing what a missing bake looks like, because it does not announce
+        /// itself: the surface component is still on the terrain, the scene still opens,
+        /// and the only sign is `Failed to create agent because there is no valid
+        /// NavMesh` in the map server's warning log - one line per entity that tried to
+        /// exist, so a quiet map produces only a handful and it reads as noise. Nothing
+        /// bakes at runtime; if no `NavMeshData` asset sits beside the scene, there is no
+        /// navmesh at all and nothing that walks can walk.
+        /// </summary>
+        /// <summary>
+        /// The furniture a character should walk **around**, not over.
+        ///
+        /// Prefixes rather than a full list of names, because the scatter numbers its
+        /// copies - `Bench`, `Bench (1)`, `Bench (2)` - and because the library names a
+        /// family consistently: everything beginning `Barrel` is a barrel.
+        ///
+        /// What is deliberately **not** here is anything structural. `Collision` (65 of
+        /// them in the village alone) is the houses' own collision, `Balcony`, `Floor`,
+        /// `Stair` and `DoorFrame` are the buildings themselves - carve any of those and
+        /// the interiors stop being reachable. The rule is furniture and containers: the
+        /// things standing *on* a floor.
+        /// </summary>
+        private static readonly string[] UnwalkableFurniture =
+        {
+            "Bench", "Stool", "Chair_", "Table_", "Workbench", "WeaponStand", "Hammer_Rack",
+            "Anvil_Log", "Bellows", "Whetstone", "Barrel", "Crate_", "FarmCrate_", "Chest_",
+            "Bag", "Wagon", "Stall_", "Cabinet", "Dresser_", "Nightstand_", "Bookcase",
+            "Bed_", "Shelf_", "Desk", "Altar", "Bucket_",
+        };
+
+        /// <summary>
+        /// Marks the furniture non-walkable before a bake, so that a bench is an obstacle
+        /// rather than a raised pavement.
+        ///
+        /// **A low prop with a flat top is walkable ground to a bake.** The surface
+        /// collects every collider (`CollectObjects.All`, `PhysicsColliders`), the agent's
+        /// climb is 0.75m and a bench seat is 0.53m up, so the voxelizer put walkable
+        /// polygons across the seats and the agents took the shortcut over them: measured
+        /// on 2026-09-22, three of the village's six benches and stools had navmesh laid
+        /// on top of them, which is exactly the ones the guard and the dog were seen
+        /// strolling across.
+        ///
+        /// Marking the geometry `Not Walkable` fixes both halves at once. No walkable
+        /// polygon is generated on the seat - and the terrain voxels *underneath* the
+        /// bench then fail the agent-height test, because the clearance from the ground to
+        /// the underside of the seat is nothing like two metres, so the bench's footprint
+        /// drops out of the navmesh as well and the path goes round. One flag, not a
+        /// carving obstacle and not a hand-placed block-out.
+        ///
+        /// Players are unaffected: a player moves on a CharacterController and never
+        /// consults the navmesh. This only reaches what walks on agents - the patrolling
+        /// guard, the dog and the monsters.
+        ///
+        /// **Outdoors only.** Interior furniture is skipped, and the first cut of this did
+        /// not skip it: carving the bank's desk left Fenwick standing on the one square of
+        /// floor no path could reach, and a room is small enough that a bed, a dresser and
+        /// a chair between them can shut it. Nothing in the demo patrols indoors, so there
+        /// is nothing to gain there and a pet following its owner through a door to lose.
+        /// </summary>
+        private const string InteriorGroupName = "Interior";
+
+        private static int MarkFurnitureUnwalkable(Scene scene)
+        {
+            int marked = 0;
+            // Clear first, so that narrowing the rule takes effect on a rerun. A modifier
+            // left behind by an earlier, wider version of this is invisible in the scene
+            // and carves the ground anyway; only furniture is touched, so a modifier put
+            // anywhere by hand is left alone.
+            foreach (GameObject root in scene.GetRootGameObjects())
+            {
+                if (System.Array.IndexOf(FrozenAreaRootNames, root.name) < 0)
+                    continue;
+                foreach (NavMeshModifier stale in root.GetComponentsInChildren<NavMeshModifier>(true))
+                {
+                    bool furniture = false;
+                    for (int i = 0; i < UnwalkableFurniture.Length && !furniture; ++i)
+                        furniture = stale.name.StartsWith(UnwalkableFurniture[i]);
+                    if (furniture)
+                        Object.DestroyImmediate(stale, true);
+                }
+            }
+
+            foreach (GameObject root in scene.GetRootGameObjects())
+            {
+                if (System.Array.IndexOf(FrozenAreaRootNames, root.name) < 0)
+                    continue;
+                foreach (Collider collider in root.GetComponentsInChildren<Collider>(true))
+                {
+                    if (collider.isTrigger)
+                        continue;
+                    bool indoors = false;
+                    for (Transform up = collider.transform; up != null && !indoors; up = up.parent)
+                        indoors = up.name == InteriorGroupName;
+                    if (indoors)
+                        continue;
+                    // The named piece, which is not always the object the collider is on -
+                    // a library prop keeps its mesh on a child.
+                    Transform piece = collider.transform;
+                    string name = piece.name;
+                    bool match = false;
+                    while (piece != null && piece != root.transform)
+                    {
+                        name = piece.name;
+                        for (int i = 0; i < UnwalkableFurniture.Length && !match; ++i)
+                            match = name.StartsWith(UnwalkableFurniture[i]);
+                        if (match)
+                            break;
+                        piece = piece.parent;
+                    }
+                    if (!match)
+                        continue;
+                    var modifier = piece.GetComponent<NavMeshModifier>();
+                    if (modifier == null)
+                        modifier = piece.gameObject.AddComponent<NavMeshModifier>();
+                    modifier.overrideArea = true;
+                    // 1 is the kit-independent index of Unity's built-in "Not Walkable"
+                    // area, which every project has and none can remove.
+                    modifier.area = 1;
+                    modifier.applyToChildren = true;
+                    ++marked;
+                }
+            }
+            if (marked > 0)
+                Debug.Log($"[{nameof(DemoSceneBuilder)}] {marked} piece(s) of furniture marked non-walkable.");
+            return marked;
+        }
+
+        [MenuItem("Open MMORPG/Demo/Rebake Island Navmesh", priority = 110)]
+        public static void RebakeNavMesh()
+        {
+            Scene scene = EditorSceneManager.OpenScene(ScenePath, OpenSceneMode.Single);
+
+            NavMeshSurface surface = null;
+            foreach (GameObject root in scene.GetRootGameObjects())
+            {
+                surface = root.GetComponentInChildren<NavMeshSurface>(true);
+                if (surface != null)
+                    break;
+            }
+            if (surface == null)
+            {
+                Debug.LogError($"[{nameof(DemoSceneBuilder)}] No {nameof(NavMeshSurface)} in {ScenePath}. " +
+                               "Only Regenerate Island Scene creates one, and that rewrites the scene.");
+                return;
+            }
+
+            // The same settings the build uses. Set again rather than trusted, because a
+            // surface that has been round a scene save can have been edited by hand.
+            surface.collectObjects = CollectObjects.All;
+            surface.useGeometry = NavMeshCollectGeometry.PhysicsColliders;
+            surface.layerMask &= ~(1 << PhysicLayers.Water);
+            EnsureSeaCarve(surface.gameObject);
+            MarkFurnitureUnwalkable(scene);
+
+            // The NPCs, the horse and the wildlife stand on the ground with a capsule
+            // each; left switched on, the bake reads every one as a post and cuts a hole
+            // around it. They are not scenery and they move.
+            //
+            // Exactly the three roots the build takes out, by name - NOT "every root that
+            // contains an entity", which was the first cut of this and is too greedy: the
+            // harvestables and the item drops are entities too and they sit under roots
+            // that also carry the scenery, so that rule would have baked the village
+            // without its buildings.
+            var hidden = new System.Collections.Generic.List<GameObject>();
+            foreach (GameObject root in scene.GetRootGameObjects())
+            {
+                if (System.Array.IndexOf(MovableRootNames, root.name) < 0 || !root.activeSelf)
+                    continue;
+                root.SetActive(false);
+                hidden.Add(root);
+            }
+
+            try
+            {
+                BakeWithDoorsOpen(surface);
+            }
+            finally
+            {
+                foreach (GameObject root in hidden)
+                    root.SetActive(true);
+            }
+
+            EditorSceneManager.MarkSceneDirty(scene);
+            EditorSceneManager.SaveScene(scene);
+            AssetDatabase.SaveAssets();
+            Debug.Log($"[{nameof(DemoSceneBuilder)}] Rebaked the navmesh in {ScenePath} " +
+                      $"with {hidden.Count} entity root(s) taken out of it. " +
+                      "The map server reads this from a NavMeshData asset beside the scene, so a " +
+                      "server running from builds/ needs Build Map Server before it sees this.");
+        }
+
+
+        /// <summary>The name of the volume that keeps the navmesh out of the sea.</summary>
+        public const string SeaCarveName = "NavmeshSeaCarve";
+
+        /// <summary>
+        /// How far above sea level the walkable ground stops, in metres.
+        ///
+        /// Not zero, because zero is the waterline itself and the point is that the
+        /// animals stay out of the water rather than stand in the edge of it. The beach
+        /// falls about a quarter of a metre every metre, so this holds them back roughly
+        /// a stride from the surf - enough to read as keeping to the sand, little enough
+        /// that the beach is still theirs to walk on.
+        /// </summary>
+        private const float NavmeshWaterline = 0.25f;
+
+        /// <summary>Wider than the 260m terrain, so the carve runs past its edges.</summary>
+        private const float SeaCarveWidth = 320f;
+
+        /// <summary>
+        /// Cuts the sea floor out of the navmesh, so that nothing which walks can walk
+        /// into the water.
+        ///
+        /// **The island does not stop at the waterline.** The terrain carries on down to
+        /// the seabed at <see cref="DemoIslandBuilder.SeabedDepth"/>, and a bake reads
+        /// that the way it reads any other ground: a gentle sand slope, well within the
+        /// agent slope limit, therefore walkable. So the navmesh has always run out under
+        /// the sea to about 125m from the middle, and every monster on it treated the
+        /// seabed as somewhere it could go - wandering out, chasing a swimming player
+        /// out, and in the deer case bolting out when shot.
+        ///
+        /// A box marked "not walkable" over everything below the waterline is the whole
+        /// fix, and it is better than the alternatives precisely because it changes
+        /// nothing else. The spawn areas keep their positions and their radii; the water
+        /// keeps its shape; no monster needs a new component or a rule about swimming.
+        /// The sea simply stops being floor, and every behaviour that asks the navmesh
+        /// where it may go gets the right answer for free:
+        ///
+        /// * wandering and chasing are `NavMeshAgent` paths, which cannot enter a hole;
+        /// * <see cref="MultiplayerARPG.Demo.DemoFlee"/> already samples the navmesh and
+        ///   swings its escape line round until it finds somewhere valid - its own notes
+        ///   list the sea as a case it handles, and it failed only because the sea was
+        ///   walkable, so the first sample succeeded and the deer ran into the water;
+        /// * spawning re-grounds itself. `MonsterSpawnArea` calls `FindGroundedPosition`
+        ///   on the entity *after* instantiating it, and the navmesh mover override of
+        ///   that widens its search until it finds mesh. So the third-odd of deer ground
+        ///   that lies under water goes on producing deer, and they now arrive on the
+        ///   nearest sand instead of standing in the shallows.
+        ///
+        /// **The volume must not be on the Water layer.** `NavMeshSurface` skips any
+        /// modifier whose layer is masked out, and this surface masks Water out
+        /// deliberately (see the bake settings). A carve sitting on Water would be
+        /// dropped silently - no warning, no error, just a bake that still has a seabed.
+        ///
+        /// Idempotent, and reused rather than replaced, so that a nudge in the inspector
+        /// survives a rebake the way the rest of the authored scene does.
+        /// </summary>
+        private static void EnsureSeaCarve(GameObject surfaceOwner)
+        {
+            Transform existing = surfaceOwner.transform.Find(SeaCarveName);
+            GameObject go = existing != null ? existing.gameObject : new GameObject(SeaCarveName);
+            if (existing == null)
+                go.transform.SetParent(surfaceOwner.transform, false);
+
+            // Identity, so that `center` below is read straight off the world. The
+            // surface multiplies the volume by its transform, so a scaled or rotated
+            // parent would otherwise skew the box.
+            go.transform.position = Vector3.zero;
+            go.transform.rotation = Quaternion.identity;
+            go.transform.localScale = Vector3.one;
+            go.layer = 0;
+
+            NavMeshModifierVolume volume = go.GetComponent<NavMeshModifierVolume>();
+            if (volume == null)
+                volume = go.AddComponent<NavMeshModifierVolume>();
+
+            // Down past the seabed rather than to it, so there is no chance of the box
+            // ending inside the ground it is meant to be cutting.
+            float floor = DemoIslandBuilder.SeabedDepth - 8f;
+            float ceiling = DemoIslandBuilder.WaterLevel + NavmeshWaterline;
+            volume.center = new Vector3(0f, (floor + ceiling) * 0.5f, 0f);
+            volume.size = new Vector3(SeaCarveWidth, ceiling - floor, SeaCarveWidth);
+
+            // 1 is "not walkable" - the one area value that cuts a hole rather than
+            // costing more to cross. Looked up rather than written, in case the project
+            // area list has been reordered, with the documented value as the fallback.
+            int notWalkable = NavMesh.GetAreaFromName("Not Walkable");
+            volume.area = notWalkable >= 0 ? notWalkable : 1;
+        }
+
+        /// <summary>
         /// Bakes the navmesh with the doors taken out of it.
         ///
         /// The doors are solid and they start closed, so baking with them in place walls
@@ -721,10 +1254,52 @@ namespace MultiplayerARPG.Demo.EditorTools
             }
 
             surface.BuildNavMesh();
+            PersistNavMesh(surface, ScenePath);
 
             foreach (Collider collider in doors)
                 collider.enabled = true;
             Debug.Log($"[{nameof(DemoSceneBuilder)}] Baked the navmesh through {doors.Count} door(s).");
+        }
+
+        /// <summary>
+        /// Writes the baked navmesh out as an asset, without which there is no navmesh at
+        /// all once the scene is loaded anywhere else.
+        ///
+        /// `NavMeshSurface.BuildNavMesh()` is the **runtime** API: it builds the data into
+        /// memory and hands it to the component, and that is all. The editor's own Bake
+        /// button does a second thing - it saves the result as an asset beside the scene -
+        /// and a script that only calls `BuildNavMesh` gets the first half. The scene then
+        /// looks right in the editor, because the in-memory data is still attached, and
+        /// has no navmesh anywhere else: saving the scene does not persist it, so the map
+        /// server loads a surface whose data is null and every agent fails with `Failed to
+        /// create agent because there is no valid NavMesh`.
+        ///
+        /// The tell is a surface whose `navMeshData` is **not null but has an empty asset
+        /// path**. Null would have been easier to spot.
+        /// </summary>
+        public static void PersistNavMesh(NavMeshSurface surface, string scenePath)
+        {
+            if (surface.navMeshData == null)
+            {
+                Debug.LogError($"[{nameof(DemoSceneBuilder)}] The bake produced no data for " +
+                               $"\"{surface.gameObject.name}\". Nothing will be able to walk.");
+                return;
+            }
+            // Already an asset from a previous bake: the data object is reused, so writing
+            // it again would throw. Saving is enough.
+            if (!string.IsNullOrEmpty(AssetDatabase.GetAssetPath(surface.navMeshData)))
+            {
+                EditorUtility.SetDirty(surface.navMeshData);
+                AssetDatabase.SaveAssets();
+                return;
+            }
+
+            string folder = scenePath.Substring(0, scenePath.Length - ".unity".Length);
+            DemoItemBuilder.EnsureFolder(folder);
+            string path = $"{folder}/NavMesh-{surface.gameObject.name}.asset";
+            AssetDatabase.CreateAsset(surface.navMeshData, path);
+            AssetDatabase.SaveAssets();
+            Debug.Log($"[{nameof(DemoSceneBuilder)}] Wrote the baked navmesh to {path}.");
         }
 
         private static void BuildVillage(Scene scene)
@@ -795,6 +1370,12 @@ namespace MultiplayerARPG.Demo.EditorTools
             GroundProp("CampfireTripod", props.transform, 0f, 0f, 20f);
             // Lit with the torches at dusk and out with them after dawn: it is the
             // middle of the green, and the thing a player arriving at night walks toward.
+            //
+            // **DemoCraftStationBuilder puts this one on `Always`**, because it is also the
+            // demo's cooking station and a cold fire pit that offers you a stew at noon
+            // reads as a bug. The night schedule here is what the fire is when nothing is
+            // cooked on it, and it is what a regenerate restores - which is one of the
+            // reasons Build Craft Stations has to be run after one.
             Kindle(firepit, BrazierFlame, DemoFlameBuilder.CampfireFlamePath, MultiplayerARPG.Demo.DemoTorch.Schedule.Night);
 
             // The smith's yard, out in front of the smith's own house rather than off on
@@ -2894,8 +3475,10 @@ namespace MultiplayerARPG.Demo.EditorTools
             MonsterCharacterEntity cultistFemale = LoadEntity($"{EntityDir}/DemoCultistFemale.prefab");
             MonsterCharacterEntity marauderMale = LoadEntity($"{EntityDir}/DemoMarauderMale.prefab");
             MonsterCharacterEntity marauderFemale = LoadEntity($"{EntityDir}/DemoMarauderFemale.prefab");
+            MonsterCharacterEntity wolf = LoadEntity($"{EntityDir}/DemoWolf.prefab");
             if (banditMale == null || banditFemale == null || cultistMale == null ||
-                cultistFemale == null || marauderMale == null || marauderFemale == null)
+                cultistFemale == null || marauderMale == null || marauderFemale == null ||
+                wolf == null)
                 return;
 
             // Weakest nearest the village, toughest at the camp, so difficulty rises as the
@@ -2924,6 +3507,31 @@ namespace MultiplayerARPG.Demo.EditorTools
             AddSpawner(root, "Spawn_Hills_Marauders", new Vector2(-14f, -58f), 24f, marauderMale, 5, 6, 4);
             AddSpawner(root, "Spawn_Camp", DemoIslandBuilder.CampCentre, 16f, marauderFemale, 6, 8, 5);
             AddSpawner(root, "Spawn_Camp_Bandits", DemoIslandBuilder.CampCentre, 16f, banditFemale, 6, 8, 4);
+
+            // Wolves: four small packs ringing the village, and the first fight the island
+            // offers anyone.
+            //
+            // The bands above are laid out by direction, which assumes the player walks the
+            // way we expect. They do not - and the one who walked south-east towards the
+            // camp met a level five marauder as the first enemy of the game and could not
+            // scratch it. A ring fixes that by not caring which way they go: every road out
+            // of the green passes a pack within a few paces of leaving.
+            //
+            // Each is small and tight - a 10m disc holding two to four - so it reads as a
+            // pack rather than a field of wolves, and four of them still come to less than
+            // one bandit field. 41m out is as close as they are allowed: the village-peace
+            // rule below wants a clear 30m beyond an area's own edge, and that rule exists
+            // because players used to log in standing among eight bandits. Placed at the
+            // limit rather than short of it, so the rule never has to move them and their
+            // spacing stays the spacing intended here.
+            //
+            // North and north-west are left out on purpose: at this distance both run into
+            // the shore, and half a pack would spawn in the sea.
+            Vector2 green = DemoIslandBuilder.VillageCentre;
+            AddSpawner(root, "Spawn_Wolves_East", green + new Vector2(41f, 0f), 10f, wolf, 1, 2, 4);
+            AddSpawner(root, "Spawn_Wolves_Southeast", green + new Vector2(29f, -29f), 10f, wolf, 1, 2, 4);
+            AddSpawner(root, "Spawn_Wolves_South", green + new Vector2(0f, -41f), 10f, wolf, 1, 2, 4);
+            AddSpawner(root, "Spawn_Wolves_West", green + new Vector2(-41f, 0f), 10f, wolf, 1, 2, 3);
         }
 
         private static MonsterCharacterEntity LoadEntity(string path)

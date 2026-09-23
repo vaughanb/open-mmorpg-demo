@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
 
@@ -120,6 +120,15 @@ namespace MultiplayerARPG.Demo.EditorTools
             new WeaponSpec { Name = "Staff", Title = "Staff", EquipType = WeaponItemEquipType.TwoHand,
                 HitDistance = 3.0f, HitFov = 70f, Damage = DamageType.Missile,
                 Missile = "SpellBolt", MissileDistance = 14f, MissileSpeed = 22f },
+            // Fists. The asset already existed but nothing authored it, so it sat on the kit's
+            // defaults with the same half-metre `startAttackDistance` the sword had - a
+            // character with nothing equipped could not reach anything either. Shorter and
+            // narrower than a blade because it is an arm's length, not a weapon's.
+            //
+            // `hitOnlySelectedTarget` is left alone here: it is TRUE on this one, which is the
+            // kit's own choice for fists and the builder does not write that field.
+            new WeaponSpec { Name = "Unarmed", Title = "Unarmed", EquipType = WeaponItemEquipType.MainHandOnly,
+                HitDistance = 1.5f, HitFov = 90f, Damage = DamageType.Melee },
         };
 
         private static void BuildWeaponTypes()
@@ -144,9 +153,59 @@ namespace MultiplayerARPG.Demo.EditorTools
                     serialized.FindProperty("damageInfo.missileDamageEntity").objectReferenceValue =
                         Load<MissileDamageEntity>($"{MissileDir}/{spec.Missile}.prefab");
                 }
+                else
+                {
+                    // Melee needs this set every bit as much as a missile does, and leaving it
+                    // out is why a warrior could not hit anything (found 2026-09-16).
+                    //
+                    // `Damage.GetDistance()` returns `min(hitDistance, startAttackDistance)`
+                    // whenever the latter is above zero, and the kit's default is **0.5**. So a
+                    // sword authored with 2.4m of reach was asked to attack only once the target
+                    // was within half a metre of the blade - and it is measured from the weapon's
+                    // damage transform, against the target's hit box. The character would walk up
+                    // to an enemy, stop, and stand there never swinging. The same number is also
+                    // the enemy detector's radius (`PlayerCharacterController_Inputs` line ~221),
+                    // so nearby-enemy targeting barely reached past the character either.
+                    //
+                    // 0.85 of the reach, matching what the missiles use: far enough out to swing
+                    // at arm's length, with enough margin that a moving target is still inside
+                    // `hitDistance` when the blow actually lands.
+                    serialized.FindProperty("damageInfo.startAttackDistance").floatValue = spec.HitDistance * 0.85f;
+                }
                 serialized.ApplyModifiedPropertiesWithoutUndo();
                 EditorUtility.SetDirty(type);
             }
+
+            AdoptUnarmedIcon();
+        }
+
+        /// <summary>
+        /// Puts the drawn fist on `DefaultWeaponItem`, which is the item a character holds
+        /// when it holds nothing.
+        ///
+        /// **It is the one item in the demo no builder makes.** It came with the kit and
+        /// was never adopted, so it sat with an empty `icon` while `Unarmed.png` sat in the
+        /// icon folder - the same shape as the mana potion, and found the same way, by
+        /// listing the icon folder against the item list. The Equipment Icon Generator
+        /// cannot help: it photographs an item's model, and a fist has none.
+        ///
+        /// Only the icon is written. Its `id` is empty and its damage comes from the
+        /// `Unarmed` weapon type above, and both of those are the kit's arrangement rather
+        /// than a gap - adopting it further would mean owning an asset the demo did not
+        /// author.
+        /// </summary>
+        private static void AdoptUnarmedIcon()
+        {
+            var unarmed = AssetDatabase.LoadAssetAtPath<BaseItem>($"{ResourcesDir}/Items/DefaultWeaponItem.asset");
+            if (unarmed == null)
+            {
+                Debug.LogWarning($"[{nameof(DemoItemBuilder)}] No DefaultWeaponItem to put the fist on.");
+                return;
+            }
+            var serialized = new SerializedObject(unarmed);
+            AdoptItemIcon(serialized, "Unarmed");
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            EditorUtility.SetDirty(unarmed);
         }
 
         /// <summary>
@@ -157,14 +216,28 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// nothing at all. Neither the kit nor the demo shipped a projectile, but the arrow
         /// model was already built and sitting unused beside the bow.
         /// </summary>
+        /// <summary>
+        /// The things that fly. One per use rather than one shared arrow, because a shot
+        /// in flight is the only tell a player gets between a skill and an ordinary
+        /// attack: the bow's plain shot is pale, an Aimed Shot is bright, a Crippling Shot
+        /// is green and a Hunter's Mark is amber. All four are the same arrow mesh — it is
+        /// the streak that differs, which is what is actually visible at twenty metres.
+        /// </summary>
         private static void BuildMissiles()
         {
             EnsureFolder(MissileDir);
-            BuildMissile("ArrowMissile", EquipmentDir + "/Arrow.prefab", 0.05f);
-            BuildMissile("SpellBolt", null, 0.14f);
+            string arrow = EquipmentDir + "/Arrow.prefab";
+            BuildMissile("ArrowMissile", arrow, 0.05f, DemoSkillEffectBuilder.ArrowPlain, 0.07f);
+            BuildMissile("ArrowAimed", arrow, 0.05f, DemoSkillEffectBuilder.ArrowAimed, 0.10f);
+            BuildMissile("ArrowCrippling", arrow, 0.05f, DemoSkillEffectBuilder.ArrowCrippling, 0.10f);
+            BuildMissile("ArrowMark", arrow, 0.05f, DemoSkillEffectBuilder.ArrowMark, 0.10f);
+            // No mesh: the core is what you see, and it is two additive billboards rather
+            // than the lit primitive sphere this used to be.
+            BuildMissile("SpellBolt", null, 0.14f, DemoSkillEffectBuilder.Arcane, 0.16f, core: 0.20f);
         }
 
-        private static void BuildMissile(string name, string modelPath, float radius)
+        private static void BuildMissile(string name, string modelPath, float radius,
+                                         Color trailColour, float trailWidth, float core = 0f)
         {
             var root = new GameObject(name);
             if (modelPath != null)
@@ -185,20 +258,16 @@ namespace MultiplayerARPG.Demo.EditorTools
                     model.transform.localEulerAngles = new Vector3(90f, 0f, 0f);
                 }
             }
-            else
-            {
-                GameObject glow = GameObject.CreatePrimitive(PrimitiveType.Sphere);
-                Object.DestroyImmediate(glow.GetComponent<Collider>());
-                glow.transform.SetParent(root.transform, false);
-                glow.transform.localScale = Vector3.one * radius * 2f;
-                glow.name = "Model";
-                glow.GetComponent<MeshRenderer>().sharedMaterial = SpellBoltMaterial();
-            }
 
             var missile = root.AddComponent<MissileDamageEntity>();
             missile.hitLayers = HitLayers;
             missile.sphereCastRadius = radius;
             missile.destroyDelay = 0f;
+
+            // After the missile component, not before: the trail hooks its own Clear onto
+            // that component's `onGetInstance`, and without it a pooled shot draws a
+            // ribbon from wherever the previous one died.
+            DemoSkillEffectBuilder.AddMissileDressing(root, trailColour, trailWidth, core);
 
             string path = MissileDir + "/" + name + ".prefab";
             PrefabUtility.SaveAsPrefabAsset(root, path);
@@ -206,25 +275,6 @@ namespace MultiplayerARPG.Demo.EditorTools
             AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceUpdate);
         }
 
-        /// <summary>A plain emissive ball for the mage's bolt. No art pack here ships one.</summary>
-        private static Material SpellBoltMaterial()
-        {
-            string path = MaterialDir + "/MI_SpellBolt.mat";
-            var existing = AssetDatabase.LoadAssetAtPath<Material>(path);
-            if (existing == null)
-            {
-                existing = new Material(Shader.Find("Universal Render Pipeline/Lit"));
-                EnsureFolder(MaterialDir);
-                AssetDatabase.CreateAsset(existing, path);
-            }
-            var colour = new Color(0.42f, 0.62f, 1f);
-            existing.SetColor("_BaseColor", colour);
-            existing.EnableKeyword("_EMISSION");
-            existing.globalIlluminationFlags = MaterialGlobalIlluminationFlags.RealtimeEmissive;
-            existing.SetColor("_EmissionColor", colour * 3f);
-            EditorUtility.SetDirty(existing);
-            return existing;
-        }
 
         private static void BuildArmorTypes()
         {
@@ -307,10 +357,12 @@ namespace MultiplayerARPG.Demo.EditorTools
                 serialized.FindProperty("fireType").enumValueIndex =
                     (int)(spec.TypeAsset == "Bow" && BowsCharge ? FireType.FireOnRelease : FireType.SingleFire);
 
-                string socket = spec.TypeAsset == "Bow" ? SocketLeftHand : SocketRightHand;
-                Vector3 facing = IsBladed(spec.TypeAsset) ? BladeFacing : Vector3.zero;
+                bool isBow = spec.TypeAsset == "Bow";
+                string socket = isBow ? SocketLeftHand : SocketRightHand;
+                Vector3 facing = IsBladed(spec.TypeAsset) ? BladeFacing : isBow ? BowFacing : Vector3.zero;
+                Vector3 seat = isBow ? BowSeat : Vector3.zero;
                 Vector3 gripPosition, gripEuler, gripScale;
-                ResolveGrip(spec.Name, facing, out gripPosition, out gripEuler, out gripScale);
+                ResolveGrip(spec.Name, facing, seat, out gripPosition, out gripEuler, out gripScale);
                 WriteModel(serialized, "equipmentModels", socket, $"{EquipmentDir}/{spec.Model}.prefab", null,
                            gripEuler, gripPosition, gripScale);
                 serialized.ApplyModifiedPropertiesWithoutUndo();
@@ -353,10 +405,31 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// speed-weighted error across both attack clips rather than squaring up one frame.
         /// Re-measure if the attack animations are ever replaced.
         ///
-        /// Staves and bows are left at zero: a staff has no edge, and the bow's plane is
-        /// already correct for the archery clips.
+        /// Staves are left at zero: a staff has no edge. Bows have their own, below.
         /// </summary>
         private static readonly Vector3 BladeFacing = new Vector3(0f, 80f, 0f);
+
+        /// <summary>
+        /// Roll and seat for a bow, so that the string faces the archer instead of the target.
+        ///
+        /// Every weapon prefab is built with its length on +Y and its flat facing Z, which for
+        /// a bow means the plane holding the string and both limbs starts out **square to the
+        /// draw**: measured on the archery clips, the bow's flat pointed down the character's
+        /// forward and the limbs bowed out to the character's left, so the drawing hand ended
+        /// up 0.70m off the side of the bow's plane rather than behind the string. Rolled, the
+        /// same hand sits 0.63m straight back along the string's own pull axis and within 2cm
+        /// of the plane - which is the difference between a string that can be drawn and one
+        /// that cannot.
+        ///
+        /// These are the numbers captured for <c>HuntingBow</c> in the AnimationEditing scene,
+        /// promoted from that one item to the default for the class. They were the only bow
+        /// grip that had ever been tuned, so <c>YewLongbow</c> was still being held flat-on.
+        /// A capture in <see cref="DemoWeaponGripOverrides"/> still wins over this, as always.
+        /// </summary>
+        private static readonly Vector3 BowFacing = new Vector3(12.474f, 79.6f, 3.744f);
+
+        /// <summary>Where the bow's grip sits in the fist, alongside <see cref="BowFacing"/>.</summary>
+        private static readonly Vector3 BowSeat = new Vector3(-0.0142f, -0.0309f, 0.0873f);
 
         /// <summary>
         /// The grip to write for an item: a grip captured from the AnimationEditing scene when
@@ -371,10 +444,10 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// captured transform is the whole grip. Delete the entry to hand the item back to
         /// <see cref="BladeFacing"/> / <see cref="ShieldFacing"/>.
         /// </summary>
-        private static void ResolveGrip(string itemName, Vector3 defaultEuler,
+        private static void ResolveGrip(string itemName, Vector3 defaultEuler, Vector3 defaultPosition,
                                         out Vector3 localPosition, out Vector3 localEuler, out Vector3 localScale)
         {
-            localPosition = Vector3.zero;
+            localPosition = defaultPosition;
             localEuler = defaultEuler;
             localScale = Vector3.one;
 
@@ -412,7 +485,7 @@ namespace MultiplayerARPG.Demo.EditorTools
             serialized.FindProperty("armorAmount.amount.baseAmount").floatValue = 6f;
             serialized.FindProperty("armorAmount.amount.amountIncreaseEachLevel").floatValue = 1.2f;
             Vector3 shieldPosition, shieldEuler, shieldScale;
-            ResolveGrip("PaintedRoundShield", ShieldFacing, out shieldPosition, out shieldEuler, out shieldScale);
+            ResolveGrip("PaintedRoundShield", ShieldFacing, Vector3.zero, out shieldPosition, out shieldEuler, out shieldScale);
             WriteModel(serialized, "equipmentModels", SocketLeftHand, $"{EquipmentDir}/VikingShield.prefab", null,
                        shieldEuler, shieldPosition, shieldScale);
             serialized.ApplyModifiedPropertiesWithoutUndo();
@@ -499,21 +572,99 @@ namespace MultiplayerARPG.Demo.EditorTools
             serialized.ApplyModifiedPropertiesWithoutUndo();
             EditorUtility.SetDirty(potion);
 
+            // The other half of the pair, and a hole nobody noticed until the icons were
+            // counted: `ManaPotion.png` had been drawn and there was no item to put it on,
+            // so a mage who ran dry had nothing to drink but spiced wine at 6 mana a cup.
+            // Priced above the healing one because mana is the scarcer of the two on this
+            // island - there is no mana-bearing food at all.
+            var mana = Create<PotionItem>($"{ResourcesDir}/Items/MinorManaPotion.asset");
+            var manaSerialized = new SerializedObject(mana);
+            WriteCommon(manaSerialized, new ItemSpec
+            {
+                Name = "MinorManaPotion",
+                Title = "Minor Mana Potion",
+                Description = "Restores a little of whatever a caster spends.",
+                Price = 25,
+                Weight = 0.2f,
+            });
+            manaSerialized.FindProperty("maxStack").intValue = 20;
+            manaSerialized.FindProperty("buff.recoveryMp.baseAmount").intValue = 40;
+            manaSerialized.FindProperty("useItemCooldown").floatValue = 2f;
+            AdoptItemIcon(manaSerialized, "ManaPotion");
+            manaSerialized.ApplyModifiedPropertiesWithoutUndo();
+            EditorUtility.SetDirty(mana);
+
             BuildProvisions();
 
-            var junk = Create<JunkItem>($"{ResourcesDir}/Items/BanditInsignia.asset");
-            var junkSerialized = new SerializedObject(junk);
-            WriteCommon(junkSerialized, new ItemSpec
+            // One trophy per enemy family, because a cultist carrying a *bandit's* insignia
+            // reads as a mistake - and until 2026-09-16 every human on the island dropped the
+            // bandit one. Each is the common drop for its own family and the thing the merchant
+            // buys; they are priced by how hard the family is to kill.
+            var trophies = new[]
             {
-                Name = "BanditInsignia",
-                Title = "Bandit Insignia",
-                Description = "A crude token the camp's crew wear. Proof of a kill.",
-                Price = 15,
-                Weight = 0.1f,
-            });
-            junkSerialized.FindProperty("maxStack").intValue = 50;
-            junkSerialized.ApplyModifiedPropertiesWithoutUndo();
-            EditorUtility.SetDirty(junk);
+                new ItemSpec { Name = "BanditInsignia", Title = "Bandit Insignia",
+                    Description = "A crude token the camp's crew wear. Proof of a kill.",
+                    Price = 15, Weight = 0.1f },
+                new ItemSpec { Name = "MarauderSeal", Title = "Marauder's Seal",
+                    Description = "Cast lead on a broken chain, stamped with a mailed fist. The heavies wear them openly.",
+                    Price = 28, Weight = 0.15f },
+                new ItemSpec { Name = "CultistSigil", Title = "Cultist's Sigil",
+                    Description = "A ring of scratched bone, still warm. Whatever it means, they all carry one.",
+                    Price = 22, Weight = 0.1f },
+            };
+            foreach (ItemSpec trophy in trophies)
+            {
+                var junk = Create<JunkItem>($"{ResourcesDir}/Items/{trophy.Name}.asset");
+                var junkSerialized = new SerializedObject(junk);
+                WriteCommon(junkSerialized, trophy);
+                junkSerialized.FindProperty("maxStack").intValue = 50;
+                junkSerialized.ApplyModifiedPropertiesWithoutUndo();
+                EditorUtility.SetDirty(junk);
+            }
+
+            BuildQuarry();
+        }
+
+        /// <summary>
+        /// What comes off the island's animals, hunted or fought.
+        ///
+        /// The deer are the one thing on the map worth killing that is not trying to kill
+        /// you, and this is the point of doing it: both parts sell, so hunting is a living
+        /// for a character who would rather not fight the bandit camp, and the venison is
+        /// worth a little more than the hide because it is the part that spoils.
+        ///
+        /// The wolves are the opposite trade - they pick the fight - so what they leave is
+        /// a consolation rather than a wage, and priced below a deer's.
+        /// </summary>
+        private static void BuildQuarry()
+        {
+            var quarry = new[]
+            {
+                new ItemSpec { Name = "Venison", Title = "Venison",
+                    Description = "A cut of deer meat, still cold. The alehouse will take it.",
+                    Price = 22, Weight = 0.8f },
+                new ItemSpec { Name = "DeerHide", Title = "Deer Hide",
+                    Description = "A whole hide, rolled and tied. Worth curing.",
+                    Price = 16, Weight = 1.2f },
+                // What comes off a wolf. Worth rather less than a deer between them: a wolf
+                // is the fight you are given rather than the one you go looking for, and
+                // paying well for it would make the village ring the better hunting ground.
+                new ItemSpec { Name = "WolfPelt", Title = "Wolf Pelt",
+                    Description = "Grey and coarse, still smelling of the moor. The tanner will take it.",
+                    Price = 18, Weight = 1.0f },
+                new ItemSpec { Name = "WolfFang", Title = "Wolf Fang",
+                    Description = "Longer than a finger joint and just as thick. They are strung and sold as charms.",
+                    Price = 9, Weight = 0.1f },
+            };
+            foreach (ItemSpec spec in quarry)
+            {
+                var item = Create<JunkItem>($"{ResourcesDir}/Items/{spec.Name}.asset");
+                var serialized = new SerializedObject(item);
+                WriteCommon(serialized, spec);
+                serialized.FindProperty("maxStack").intValue = 20;
+                serialized.ApplyModifiedPropertiesWithoutUndo();
+                EditorUtility.SetDirty(item);
+            }
         }
 
         /// <summary>Something the alehouse sells: what it does for you, and for how long.</summary>
@@ -595,6 +746,278 @@ namespace MultiplayerARPG.Demo.EditorTools
 
         // ---- helpers ---------------------------------------------------------
 
+        // ---- upkeep: durability, repair, refine and dismantle -----------------
+
+        /// <summary>
+        /// Gear wears out, which is what gives the island's smith something to do.
+        ///
+        /// Every piece of equipment shipped with `maxDurability: 0` until 2026-09-22, and
+        /// zero does not mean "very tough" - it means the whole system is switched off.
+        /// `DefaultGameplayRule` already decreases durability on every blow landed and
+        /// taken (0.5 a hit off a weapon, 0.5 off a shield, 0.1 off each armour piece) and
+        /// `GetEquipmentStatsRate` already steps what a worn item is worth **down** long
+        /// before it breaks: full value above half durability, then 75%, 50%, 25%, and
+        /// nothing at all under 5%. All of that was dead code against a max of zero.
+        ///
+        /// **Nothing is destroyed.** `destroyIfBroken` stays false, so a broken sword is a
+        /// useless sword and not a lost one - the right trade for a demo, where losing the
+        /// thing you spent the island's gold on is a story nobody wants to tell.
+        ///
+        /// **A step of its own, and not part of `Build Items`,** because gear dismantles
+        /// into the island's materials and refines with its stone - and `Stone` and
+        /// `Timber` are built by `Build Harvestables` while `Leather` comes from
+        /// `Build Progression`, both of which run *after* the items do. Written from here
+        /// the references would be null on a clean rebuild, silently, and the smith would
+        /// hand back nothing. Re-running `Build Items` does not undo this: it writes only
+        /// the fields it owns and leaves the rest of each asset alone.
+        /// </summary>
+        [MenuItem("Open MMORPG/Demo/Build Gear Upkeep", priority = 153)]
+        public static void BuildUpkeep()
+        {
+            foreach (string material in new[] { ScrapMetal, ScrapWood, ScrapHide })
+            {
+                if (LoadItem(material) != null)
+                    continue;
+                Debug.LogError($"[{nameof(DemoItemBuilder)}] No \"{material}\" item. Run Build Items, " +
+                               "Build Harvestables and Build Progression first - gear is dismantled into " +
+                               "the materials those steps create.");
+                return;
+            }
+
+            BuildItemRefines();
+
+            int written = 0;
+            foreach (ItemSpec spec in WeaponItems)
+                written += WriteUpkeep(spec.Name, spec.Price, WeaponDurability(spec), WeaponScrap(spec.TypeAsset)) ? 1 : 0;
+            // The shield is hit like armour and worn out like a weapon: half a point every
+            // blow it takes, three quarters of one for a blow it blocks.
+            written += WriteUpkeep("PaintedRoundShield", 90, 150f, ScrapWood) ? 1 : 0;
+            foreach (ArmourSpec spec in ArmourItems)
+                written += WriteUpkeep(spec.Name, spec.Price, ArmourDurability(spec.Armour), ArmourScrap(spec.Model)) ? 1 : 0;
+
+            AssetDatabase.SaveAssets();
+            AssetDatabase.Refresh();
+            Debug.Log($"[{nameof(DemoItemBuilder)}] {written} pieces of gear can now wear out, be repaired, " +
+                      "refined and dismantled.");
+        }
+
+        /// <summary>
+        /// What a blade or a bow breaks down into. Steel and stone on one side, wood and
+        /// horn on the other - the demo has no ingot, so `Stone` is its metal.
+        /// </summary>
+        private static string WeaponScrap(string weaponType)
+        {
+            return weaponType == "Bow" || weaponType == "Staff" ? ScrapWood : ScrapMetal;
+        }
+
+        /// <summary>
+        /// What a piece of armour breaks down into, read off the outfit it is cut from:
+        /// the knight's plate is metal and everything else on the island is cloth or hide.
+        /// </summary>
+        private static string ArmourScrap(string model)
+        {
+            return model.Contains("Knight") ? ScrapMetal : ScrapHide;
+        }
+
+        private static bool WriteUpkeep(string name, int price, float durability, string scrap)
+        {
+            var item = Load<BaseItem>($"{ResourcesDir}/Items/{name}.asset");
+            if (item == null)
+            {
+                Debug.LogWarning($"[{nameof(DemoItemBuilder)}] No item \"{name}\" to give durability to.");
+                return false;
+            }
+            var serialized = new SerializedObject(item);
+            serialized.FindProperty("maxDurability").floatValue = durability;
+            serialized.FindProperty("destroyIfBroken").boolValue = false;
+
+            // **The trap: durability alone does not make a thing repairable.** Repair
+            // prices live on the `ItemRefine` asset, not on the item, so an item with a
+            // max durability and no refine asset wears out and then cannot be mended -
+            // `TryGetRepairPrice` returns `UI_ERROR_INVALID_DATA` and the smith's window
+            // shows an item he will not touch, with nothing on screen to say why.
+            serialized.FindProperty("itemRefine").objectReferenceValue = RefineFor(price);
+
+            // A smith breaks gear down for the material in it; Marek pays for what he can
+            // resell. So dismantling returns stuff and selling returns coin, and the two
+            // are worth reaching for at different times.
+            serialized.FindProperty("dismantleReturnGold").intValue = 0;
+            SerializedProperty returns = serialized.FindProperty("dismantleReturnItems");
+            BaseItem material = string.IsNullOrEmpty(scrap) ? null : LoadItem(scrap);
+            if (material == null)
+            {
+                returns.arraySize = 0;
+            }
+            else
+            {
+                returns.arraySize = 1;
+                SerializedProperty entry = returns.GetArrayElementAtIndex(0);
+                entry.FindPropertyRelative("item").objectReferenceValue = material;
+                // Counted rather than valued, and capped. Paying out a third of the
+                // item's price in material looks fair until you notice stone sells for
+                // three gold: a knight's cuirass came back as **thirty-one stone**, ten
+                // recipes' worth, which makes an afternoon at the quarry pointless. A
+                // better piece should yield more and no piece should yield a stockpile.
+                entry.FindPropertyRelative("amount").intValue =
+                    Mathf.Clamp(1 + price / 40, 1, 8);
+            }
+
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            EditorUtility.SetDirty(item);
+            return true;
+        }
+
+        /// <summary>What a piece of gear breaks down into: metal, wood or hide.</summary>
+        private const string ScrapMetal = "Stone";
+        private const string ScrapWood = "Timber";
+        private const string ScrapHide = "Leather";
+
+        /// <summary>
+        /// How tough a weapon is: better blades hold an edge longer.
+        ///
+        /// At half a point a blow, ninety plus five a damage point is something like three
+        /// hundred swings for the shortsword and close to four for the elder staff - a
+        /// couple of trips out to the headland and back, so a player meets the smith once
+        /// or twice over the island rather than every evening or never.
+        /// </summary>
+        private static float WeaponDurability(ItemSpec spec)
+        {
+            return 90f + spec.Max * 5f;
+        }
+
+        /// <summary>
+        /// How tough a piece of armour is.
+        ///
+        /// Much lower than a weapon's, because armour wears a fifth as fast - a tenth of a
+        /// point per blow **received**, and the same tenth off every piece worn at once. At
+        /// these numbers a full set comes out of the crypt visibly worn rather than
+        /// untouched, and the peasant rags wear through faster than the knight's plate
+        /// because the rate is flat and their pool is smaller, which is the right way round.
+        /// </summary>
+        private static float ArmourDurability(float armour)
+        {
+            return 40f + armour * 2f;
+        }
+
+        /// <summary>
+        /// The three grades of workmanship, and what a smith charges to put each right.
+        ///
+        /// One asset per grade rather than one per item: `ItemRefine` carries flat gold
+        /// amounts, not a rate, so everything sharing an asset is repaired for the same
+        /// price - which is fine for three bands and wrong for one shared asset.
+        /// </summary>
+        private struct RefineGrade
+        {
+            public string Name;
+            /// <summary>Everything priced under this belongs to the grade above it in the table.</summary>
+            public int UnderPrice;
+            /// <summary>What a full repair costs at the worst band; the easier bands scale off it.</summary>
+            public int RepairGold;
+            /// <summary>Gold for each step of refinement, from +1 upward.</summary>
+            public int[] RefineGold;
+            /// <summary>Stone for each step, ground away on the wheel.</summary>
+            public int[] RefineStone;
+        }
+
+        private static readonly RefineGrade[] RefineGrades =
+        {
+            new RefineGrade { Name = "PlainGear", UnderPrice = 80, RepairGold = 30,
+                RefineGold = new[] { 40, 110, 260 }, RefineStone = new[] { 2, 5, 9 } },
+            new RefineGrade { Name = "FineGear", UnderPrice = 160, RepairGold = 70,
+                RefineGold = new[] { 90, 240, 520 }, RefineStone = new[] { 4, 9, 16 } },
+            new RefineGrade { Name = "MasterworkGear", UnderPrice = int.MaxValue, RepairGold = 140,
+                RefineGold = new[] { 180, 460, 980 }, RefineStone = new[] { 7, 15, 26 } },
+        };
+
+        /// <summary>
+        /// What a repair costs, by how far gone the thing is.
+        ///
+        /// Each entry's rate is the **top** of a band, not the bottom: `TryGetRepairPrice`
+        /// sorts the list high to low and returns the first entry whose rate the item is
+        /// still under, so the 1.0 entry prices anything from three quarters up and the
+        /// 0.25 entry prices a wreck. Hence the prices run the other way from the rates.
+        /// </summary>
+        private static readonly float[] RepairBands = { 1f, 0.75f, 0.5f, 0.25f };
+        private static readonly float[] RepairBandCost = { 0.3f, 0.55f, 0.8f, 1f };
+
+        /// <summary>
+        /// Three steps of refinement and no more.
+        ///
+        /// Item level is what refining raises, and the item builder already gives a weapon
+        /// **35% of its base damage per level** and armour 20% of its base - so +3 is a
+        /// blade worth twice what it was. That is the lever to pull if this ever wants
+        /// retuning, and the reason the ladder is short and the gold steep.
+        ///
+        /// Failure costs the materials and nothing else: no destroyed item, no lost levels.
+        /// The kit supports both and a demo should not teach a player to fear its own
+        /// features.
+        /// </summary>
+        private static readonly float[] RefineSuccess = { 0.85f, 0.55f, 0.3f };
+
+        private static void BuildItemRefines()
+        {
+            EnsureFolder($"{ResourcesDir}/ItemRefines");
+            foreach (RefineGrade grade in RefineGrades)
+            {
+                var refine = Create<ItemRefine>($"{ResourcesDir}/ItemRefines/{grade.Name}.asset");
+                var serialized = new SerializedObject(refine);
+                serialized.FindProperty("id").stringValue = grade.Name;
+                serialized.FindProperty("defaultTitle").stringValue = grade.Name;
+
+                SerializedProperty prices = serialized.FindProperty("repairPrices");
+                prices.arraySize = RepairBands.Length;
+                for (int i = 0; i < RepairBands.Length; ++i)
+                {
+                    SerializedProperty price = prices.GetArrayElementAtIndex(i);
+                    price.FindPropertyRelative("durabilityRate").floatValue = RepairBands[i];
+                    price.FindPropertyRelative("requireGold").intValue =
+                        Mathf.RoundToInt(grade.RepairGold * RepairBandCost[i]);
+                    price.FindPropertyRelative("requireItems").arraySize = 0;
+                    price.FindPropertyRelative("requireCurrencies").arraySize = 0;
+                }
+
+                BaseItem stone = LoadItem(ScrapMetal);
+                SerializedProperty levels = serialized.FindProperty("levels");
+                levels.arraySize = RefineSuccess.Length;
+                for (int i = 0; i < RefineSuccess.Length; ++i)
+                {
+                    SerializedProperty level = levels.GetArrayElementAtIndex(i);
+                    level.FindPropertyRelative("successRate").floatValue = RefineSuccess[i];
+                    level.FindPropertyRelative("requireGold").intValue = grade.RefineGold[i];
+                    level.FindPropertyRelative("refineFailDecreaseLevels").intValue = 0;
+                    level.FindPropertyRelative("refineFailDestroyItem").boolValue = false;
+                    level.FindPropertyRelative("availableEnhancers").arraySize = 0;
+                    level.FindPropertyRelative("requireCurrencies").arraySize = 0;
+                    SerializedProperty requires = level.FindPropertyRelative("requireItems");
+                    requires.arraySize = stone == null ? 0 : 1;
+                    if (stone != null)
+                    {
+                        SerializedProperty entry = requires.GetArrayElementAtIndex(0);
+                        entry.FindPropertyRelative("item").objectReferenceValue = stone;
+                        entry.FindPropertyRelative("amount").intValue = grade.RefineStone[i];
+                    }
+                }
+
+                serialized.ApplyModifiedPropertiesWithoutUndo();
+                EditorUtility.SetDirty(refine);
+            }
+        }
+
+        private static ItemRefine RefineFor(int price)
+        {
+            foreach (RefineGrade grade in RefineGrades)
+            {
+                if (price < grade.UnderPrice)
+                    return Load<ItemRefine>($"{ResourcesDir}/ItemRefines/{grade.Name}.asset");
+            }
+            return null;
+        }
+
+        private static BaseItem LoadItem(string name)
+        {
+            return Load<BaseItem>($"{ResourcesDir}/Items/{name}.asset");
+        }
+
         private static void WriteCommon(SerializedObject serialized, ItemSpec spec)
         {
             serialized.FindProperty("id").stringValue = spec.Name;
@@ -664,6 +1087,66 @@ namespace MultiplayerARPG.Demo.EditorTools
                 found.Add(AssetDatabase.LoadAssetAtPath<Object>(AssetDatabase.GUIDToAssetPath(guid)));
             return found;
         }
+
+        /// <summary>
+        /// Puts a drawn icon on an item, by file name.
+        ///
+        /// **An item's icon has to be assigned; dropping the PNG in the folder does
+        /// nothing.** Nothing in the kit or the demo matches art to items by name - the
+        /// equipment icons are bound by `Tools > Equipment Icon Generator` when it is run,
+        /// and everything else is bound by a builder. Six items drawn on 2026-09-22 sat in
+        /// `Textures/Icons/Items` with six empty `icon` fields and nothing in the console,
+        /// which is the same silent shape as a PNG that imported as a plain texture.
+        ///
+        /// **The file is not named after the item**, and never has been: `MinorHealingPotion`
+        /// wears `HealthPotion.png` and `IronLongsword` wears `IronLongsword_icon.png`. So
+        /// the builder that owns an item names its icon, rather than a rule guessing.
+        ///
+        /// The import settings are corrected on the way past, and only when they are wrong:
+        /// a PNG dropped into the project imports as a plain `Texture2D`, and
+        /// `LoadAssetAtPath&lt;Sprite&gt;` on one of those returns **null** rather than
+        /// failing - a blank slot in the inventory with nothing to explain it.
+        /// </summary>
+        public static Sprite AdoptItemIcon(SerializedObject item, string iconName)
+        {
+            if (string.IsNullOrEmpty(iconName))
+                return null;
+            string path = $"{IconDir}/{iconName}.png";
+            if (!System.IO.File.Exists(path))
+            {
+                Debug.LogWarning($"[{nameof(DemoItemBuilder)}] No icon at \"{path}\"; " +
+                                 "that item will show a blank square.");
+                return null;
+            }
+
+            var importer = AssetImporter.GetAtPath(path) as TextureImporter;
+            if (importer != null &&
+                (importer.textureType != TextureImporterType.Sprite ||
+                 importer.spriteImportMode != SpriteImportMode.Single ||
+                 !importer.alphaIsTransparency))
+            {
+                importer.textureType = TextureImporterType.Sprite;
+                importer.spriteImportMode = SpriteImportMode.Single;
+                importer.alphaSource = TextureImporterAlphaSource.FromInput;
+                importer.alphaIsTransparency = true;
+                importer.SaveAndReimport();
+            }
+
+            var sprite = AssetDatabase.LoadAssetAtPath<Sprite>(path);
+            if (sprite == null)
+            {
+                Debug.LogWarning($"[{nameof(DemoItemBuilder)}] {path} is there but did not load as a " +
+                                 "Sprite. Check its import settings.");
+                return null;
+            }
+            SerializedProperty icon = item.FindProperty("icon");
+            if (icon != null)
+                icon.objectReferenceValue = sprite;
+            return sprite;
+        }
+
+        /// <summary>Where the demo's drawn item art lives.</summary>
+        private const string IconDir = "Assets/OpenMMORPG/Demo/Textures/Icons/Items";
 
         public static void EnsureFolder(string path)
         {

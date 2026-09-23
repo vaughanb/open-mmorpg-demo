@@ -71,9 +71,80 @@ namespace MultiplayerARPG.Demo.EditorTools
             foreach (Weapon weapon in Weapons)
                 Build(weapon);
             BuildShield();
+            // After the loop, not inside it: the bow wants the arrow prefab, which is built
+            // two entries later.
+            DressBow();
 
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();
+        }
+
+        /// <summary>
+        /// Gives the bow the component that draws it: <see cref="DemoBow"/>, which bends the
+        /// string back to the drawing hand, flexes the limbs with it, and carries, nocks and
+        /// looses an arrow.
+        ///
+        /// It has to be added here rather than by hand, because <see cref="Save"/> writes each
+        /// prefab out from a freshly built object - anything added in the inspector lasts
+        /// until the next "Build Weapon Prefabs" and no longer.
+        ///
+        /// <see cref="DemoBow"/> is an <c>EquipmentEntity</c>, which is how it hears the kit's
+        /// <c>PlayLaunch</c>; the bow is the first demo weapon to carry one, so nothing else
+        /// needs this treatment.
+        /// </summary>
+        private static void DressBow()
+        {
+            string path = $"{OutputDir}/Bow.prefab";
+            var asset = AssetDatabase.LoadAssetAtPath<GameObject>(path);
+            if (asset == null)
+            {
+                Debug.LogError($"[{nameof(DemoWeaponBuilder)}] No bow prefab at \"{path}\" to dress.");
+                return;
+            }
+
+            // Before the prefab is opened for editing: the reimport this can trigger would
+            // invalidate anything already loaded.
+            MakeMeshReadable(asset);
+
+            GameObject root = PrefabUtility.LoadPrefabContents(path);
+            try
+            {
+                DemoBow bow = root.GetComponent<DemoBow>();
+                if (bow == null)
+                    bow = root.AddComponent<DemoBow>();
+                bow.arrowPrefab = AssetDatabase.LoadAssetAtPath<GameObject>($"{OutputDir}/Arrow.prefab");
+                if (bow.arrowPrefab == null)
+                    Debug.LogWarning($"[{nameof(DemoWeaponBuilder)}] No arrow prefab, so the bow will draw an empty string.");
+                PrefabUtility.SaveAsPrefabAsset(root, path);
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(root);
+            }
+            Debug.Log($"[{nameof(DemoWeaponBuilder)}] Bow: string and nocked arrow wired up.");
+        }
+
+        /// <summary>
+        /// Turns Read/Write on for whichever model the bow prefab actually points at.
+        ///
+        /// The string is bent by moving vertices, which needs the mesh readable at run time,
+        /// and the FBX importers ship with it off. Resolved through the prefab rather than by
+        /// path on purpose: <c>DemoArtCollector</c> repoints the prefab from the Malagen
+        /// library to the collected copy under <c>Demo/Art</c>, so the file that matters
+        /// depends on whether art has been collected yet.
+        /// </summary>
+        private static void MakeMeshReadable(GameObject prefab)
+        {
+            MeshFilter filter = prefab.GetComponentInChildren<MeshFilter>(true);
+            if (filter == null || filter.sharedMesh == null)
+                return;
+            string meshPath = AssetDatabase.GetAssetPath(filter.sharedMesh);
+            var importer = AssetImporter.GetAtPath(meshPath) as ModelImporter;
+            if (importer == null || importer.isReadable)
+                return;
+            importer.isReadable = true;
+            importer.SaveAndReimport();
+            Debug.Log($"[{nameof(DemoWeaponBuilder)}] Read/Write turned on for \"{meshPath}\" so the bow string can bend.");
         }
 
         private static void Build(Weapon weapon)

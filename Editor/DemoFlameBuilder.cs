@@ -309,11 +309,13 @@ namespace MultiplayerARPG.Demo.EditorTools
             shape.position = new Vector3(0f, height, 0f);
         }
 
-        private static void Wander(ParticleSystem system, float strength, float frequency)
+        private static void Wander(ParticleSystem system, float strength, float frequency, AnimationCurve overLife = null)
         {
             ParticleSystem.NoiseModule noise = system.noise;
             noise.enabled = true;
-            noise.strength = strength;
+            noise.strength = overLife == null
+                ? new ParticleSystem.MinMaxCurve(strength)
+                : new ParticleSystem.MinMaxCurve(strength, overLife);
             noise.frequency = frequency;
             noise.scrollSpeed = 1.2f;
             noise.damping = true;
@@ -368,7 +370,12 @@ namespace MultiplayerARPG.Demo.EditorTools
             RiseFrom(system, recipe.Bed, 6f, 0f);
             // Enough to lean and lick, not enough to throw tongues sideways: at twice
             // this the campfire spread into a wide pale cloud rather than standing up.
-            Wander(system, recipe.FlameSizeMax * 0.7f, 2.2f);
+            // The wander comes in over the tongue's life rather than from birth: applied
+            // at full strength from the first frame, it threw the newborn sprites about
+            // and the foot of the fire danced as much as its tip. Held near still for
+            // the first fifth, the base stays on the bed and only the flame above licks.
+            Wander(system, recipe.FlameSizeMax * 0.7f, 2.2f, new AnimationCurve(
+                new Keyframe(0f, 0.05f), new Keyframe(0.2f, 0.2f), new Keyframe(0.55f, 1f), new Keyframe(1f, 1f)));
             // Orange within the first tenth of its life. Held yellow any longer, the
             // overlap of a few dozen sprites adds up to a pale blob with no red in it.
             Tint(system, Ramp(

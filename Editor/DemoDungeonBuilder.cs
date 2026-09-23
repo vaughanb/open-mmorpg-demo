@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using Unity.AI.Navigation;
 using UnityEditor;
 using UnityEditor.SceneManagement;
@@ -192,7 +192,7 @@ namespace MultiplayerARPG.Demo.EditorTools
 
         // ---- build -----------------------------------------------------------
 
-        [MenuItem("Open MMORPG/Demo/Build Dungeon Scene")]
+        [MenuItem("Open MMORPG/Demo/Regenerate Dungeon Scene (destroys hand edits)")]
         public static void Build()
         {
             DemoItemBuilder.EnsureFolder("Assets/OpenMMORPG/Demo/Scenes");
@@ -203,7 +203,14 @@ namespace MultiplayerARPG.Demo.EditorTools
             {
                 scene = EditorSceneManager.OpenScene(ScenePath, OpenSceneMode.Single);
                 foreach (GameObject root in scene.GetRootGameObjects())
+                {
+                    // Hand-placed work is not the generator's to wipe, down here as much as
+                    // on the island; see DemoSceneBuilder.AuthoredRootName. It stays switched
+                    // on through BakeNavMesh below, so what you put in the crypt blocks a path.
+                    if (root.name == DemoSceneBuilder.AuthoredRootName)
+                        continue;
                     Object.DestroyImmediate(root);
+                }
             }
             else
             {
@@ -245,33 +252,80 @@ namespace MultiplayerARPG.Demo.EditorTools
         }
 
         /// <summary>
-        /// The crypt's ambience bed: one 2D loop from the CryptAmbience clip family under
-        /// an `Ambience` root, driven by <see cref="MultiplayerARPG.Demo.DemoAmbientLoop"/>
-        /// so the ambient volume setting applies. Not built when no clip is provided.
+        /// What the crypt sounds like with nothing happening in it: the ambience bed and the
+        /// music, both under one `Ambience` root so `Rebuild Crypt Ambience` renews the pair.
+        ///
+        /// They are two different things on two different volume settings - the bed follows
+        /// **Ambient**, the music follows **BGM** - and either is skipped when its clip has
+        /// not been provided.
         /// </summary>
         private static void BuildAmbience(Scene scene)
         {
             AudioClip[] clips = DemoAudioWiring.Clips(DemoAudioWiring.CryptAmbience);
-            if (clips.Length == 0)
+            AudioClip[] tracks = DemoAudioWiring.MusicClips(DemoAudioWiring.DungeonMusic);
+            if (clips.Length == 0 && tracks.Length == 0)
                 return;
             var root = new GameObject("Ambience");
             SceneManager.MoveGameObjectToScene(root, scene);
-            var go = new GameObject("Crypt");
-            go.transform.SetParent(root.transform, false);
-            var source = go.AddComponent<AudioSource>();
-            source.clip = clips[0];
-            source.loop = true;
-            source.playOnAwake = true;
-            source.spatialBlend = 0f;
-            source.volume = 0.6f;
-            var loop = go.AddComponent<MultiplayerARPG.Demo.DemoAmbientLoop>();
-            loop.baseVolume = 0.6f;
-            loop.fadeWithHeight = false;
+
+            if (clips.Length > 0)
+            {
+                var go = new GameObject("Crypt");
+                go.transform.SetParent(root.transform, false);
+                var source = go.AddComponent<AudioSource>();
+                source.clip = clips[0];
+                source.loop = true;
+                source.playOnAwake = true;
+                source.spatialBlend = 0f;
+                source.volume = 0.6f;
+                var loop = go.AddComponent<MultiplayerARPG.Demo.DemoAmbientLoop>();
+                loop.baseVolume = 0.6f;
+                loop.fadeWithHeight = false;
+            }
+
+            BuildMusic(root.transform, tracks);
         }
 
         /// <summary>
-        /// Replaces the crypt's ambience in the saved dungeon scene and nothing else, so a
-        /// new clip does not cost a full dungeon rebuild.
+        /// The crypt's music: comes and goes as the island's does, but **starts the moment
+        /// the player gets here** rather than after a wait.
+        ///
+        /// The gaps are left at the component's defaults (180-420 s). The island sets its
+        /// own, shorter ones now that it runs on an MMO world-music schedule; the crypt is
+        /// a visit rather than a place you live in, so it keeps the longer silences and is
+        /// usually heard once on the way down. The other difference is the first gap, set
+        /// to zero where the island waits a few seconds: the island's music is meant to
+        /// greet a character who has just logged in, while the stair down is an event you
+        /// are already walking down, and a silent stair is a worse entrance than a scored
+        /// one. Zero is measured from when there is
+        /// a listener to hear it - see <see cref="MultiplayerARPG.Demo.DemoMusicPlayer"/> -
+        /// and in a map scene the listener arrives with the player, so zero means "as the
+        /// character walks in" rather than "as the scene loads".
+        ///
+        /// The fade still applies, so the track comes up over a couple of seconds instead
+        /// of snapping on. Nothing plays on a headless server.
+        /// </summary>
+        private static void BuildMusic(Transform parent, AudioClip[] tracks)
+        {
+            if (tracks.Length == 0)
+                return;
+            var go = new GameObject("Music");
+            go.transform.SetParent(parent, false);
+            var source = go.AddComponent<AudioSource>();
+            source.playOnAwake = false;
+            source.spatialBlend = 0f;
+            source.volume = 0f;
+            var music = go.AddComponent<MultiplayerARPG.Demo.DemoMusicPlayer>();
+            music.tracks = tracks;
+            music.mode = MultiplayerARPG.Demo.DemoMusicPlayer.PlayMode.Occasional;
+            music.volume = DemoAudioWiring.DungeonMusicVolume;
+            music.firstGapMin = 0f;
+            music.firstGapMax = 0f;
+        }
+
+        /// <summary>
+        /// Replaces the crypt's ambience and music in the saved dungeon scene and nothing
+        /// else, so a new clip or track does not cost a full dungeon rebuild.
         /// </summary>
         [MenuItem("Open MMORPG/Demo/Rebuild Crypt Ambience")]
         public static void RebuildAmbience()
@@ -290,7 +344,7 @@ namespace MultiplayerARPG.Demo.EditorTools
             BuildAmbience(scene);
             EditorSceneManager.MarkSceneDirty(scene);
             EditorSceneManager.SaveScene(scene);
-            Debug.Log($"[{nameof(DemoDungeonBuilder)}] Rebuilt the crypt's ambience in {ScenePath}.");
+            Debug.Log($"[{nameof(DemoDungeonBuilder)}] Rebuilt the crypt's ambience and music in {ScenePath}.");
         }
 
         /// <summary>
@@ -807,6 +861,12 @@ namespace MultiplayerARPG.Demo.EditorTools
             // never reach.
             surface.layerMask = ~(1 << CeilingLayer);
             surface.BuildNavMesh();
+            // And write it out. `BuildNavMesh` only builds into memory; without this
+            // the crypt looks navigable in the editor and has no navmesh at all on the
+            // map server. See DemoSceneBuilder.PersistNavMesh - the island had the same
+            // hole, and it went unnoticed here for longer only because nothing spawns
+            // down here until a player walks in.
+            DemoSceneBuilder.PersistNavMesh(surface, ScenePath);
         }
 
         // ---- the map, and the way in ---------------------------------------------

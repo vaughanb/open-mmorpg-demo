@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using MultiplayerARPG.GameData.Model.Playables;
 using UnityEditor;
 using UnityEngine;
@@ -41,6 +41,49 @@ namespace MultiplayerARPG.Demo.EditorTools
         public const string SocketPauldron = "Pauldron";
 
         /// <summary>
+        /// Where a <see cref="GameEffect"/> can be hung: a skill's cast and activate effects,
+        /// a buff, a hit, the level-up flash. The kit looks these up by name in
+        /// `effectContainers` and **silently drops any effect whose socket is missing** —
+        /// <see cref="GameEntityModel.InstantiateEffect"/> does `continue` on a miss — so a
+        /// character with none of these, which is what every demo character was until now,
+        /// can never show an effect at all however correctly the effect is authored.
+        ///
+        /// `Body` and `Floor` are the two the demo's own effects already ask for; the rest
+        /// are here because a skill that has to come out of a hand or off the head cannot be
+        /// authored at all without somewhere to put it.
+        ///
+        /// Each is its own object rather than the bone itself, because these bones are
+        /// authored Y-up along their own length (see <see cref="CreateSocket"/>) and an
+        /// effect spawned with that rotation fires sideways. The sockets are built square to
+        /// the character instead.
+        /// </summary>
+        private static readonly EffectSocket[] EffectSockets =
+        {
+            // the ground the character stands on: casting circles, level-up pillars,
+            // anything an effect marked stayInPlace should be left behind on
+            new EffectSocket("Floor", null),
+            // chest height and on the spine, so it follows a lean: hits, auras, buffs
+            new EffectSocket("Body", "spine_02"),
+            new EffectSocket("Head", "Head"),
+            // in the fist, where a bolt or a heal would leave the hand
+            new EffectSocket("RightHand", "hand_r"),
+            new EffectSocket("LeftHand", "hand_l"),
+        };
+
+        private struct EffectSocket
+        {
+            public readonly string Name;
+            /// <summary>The bone it hangs from, or null for the model root.</summary>
+            public readonly string Bone;
+
+            public EffectSocket(string name, string bone)
+            {
+                Name = name;
+                Bone = bone;
+            }
+        }
+
+        /// <summary>
         /// How far along the wrist-to-knuckle line the fist closes, as a fraction.
         /// Half is the middle of the palm.
         /// </summary>
@@ -73,6 +116,15 @@ namespace MultiplayerARPG.Demo.EditorTools
             /// grafting the lot puts a character in a breastplate and a tabard at once.
             /// </summary>
             public string[] Parts;
+            /// <summary>
+            /// Armour sockets to fill with the **bare body** instead of an outfit piece.
+            ///
+            /// Leaving a slot out of <see cref="Parts"/> does not roll a sleeve up, it
+            /// removes the arm: bare parts are instantiated only for the equipment-driven
+            /// player bodies, so an outfit model is nothing but its outfit and a slot with
+            /// no piece in it is a hole. Naming the socket here puts the skin back.
+            /// </summary>
+            public string[] Bare;
             /// <summary>
             /// A body the player can be. It carries every hairstyle and beard that fits it,
             /// switched by the kit's body-part system, instead of one baked hairstyle. See
@@ -113,12 +165,24 @@ namespace MultiplayerARPG.Demo.EditorTools
             // the breastplate. No hair: the armet covers the head.
             new Variant { Name = "GuardModel_Male", Gender = "Male", Outfit = "Knight",
                 Parts = new[] { "Body_Cloth", "Arms", "Legs_Armor", "Feet_Armor", "Acc_Pauldron_Round", "Head_Armet" } },
+
+            // The smith is a peasant **without the sleeves**, which is the whole
+            // characterisation: the library has five outfits and four of them are already
+            // spoken for by somebody the player fights or banks with, so he has to be a
+            // villager - and a villager who reads as a different man from Marek. Bare to
+            // the elbow at a forge does that, and the buzzed head keeps him apart from the
+            // pedlar's parting at a glance.
+            new Variant { Name = "SmithModel_Male", Gender = "Male", Outfit = "Peasant", Hair = "Hair_Buzzed",
+                Parts = new[] { "Body", "Legs", "Feet" }, Bare = new[] { "Arms" } },
         };
 
         [MenuItem("Open MMORPG/Demo/Build Character Models")]
         public static void BuildAll()
         {
             EnsureFolder(ModelOutDir);
+            // Before the models are built, so they are wired to clips that already carry
+            // the right loop flag - see DemoAnimationSet.MustLoop for the one that does not.
+            DemoAnimationSet.EnsureLooping();
             ShowBothSidesOfCloth();
             foreach (Variant variant in Variants)
                 Build(variant);
@@ -156,6 +220,23 @@ namespace MultiplayerARPG.Demo.EditorTools
             else
             {
                 GraftOutfit(root, bones, variant);
+                if (variant.Bare != null)
+                {
+                    foreach (string socket in variant.Bare)
+                    {
+                        GameObject part = InstantiateUnpacked($"{PartDir}/Bare{socket}_{suffix}.prefab");
+                        if (part == null)
+                        {
+                            Debug.LogError($"[{nameof(DemoCharacterBuilder)}] No bare part for socket \"{socket}\".");
+                            continue;
+                        }
+                        SkinnedMeshRenderer renderer = FindRenderer(part, $"Bare{socket}");
+                        Rebind(renderer, bones);
+                        renderer.transform.SetParent(root.transform, false);
+                        bareParts[socket] = renderer.gameObject;
+                        Object.DestroyImmediate(part);
+                    }
+                }
             }
 
             // What head gear replaces: the hair, or for a selectable body the holder that
@@ -192,9 +273,9 @@ namespace MultiplayerARPG.Demo.EditorTools
             // animation timing, so a culled attack would never land its hit.
             animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
 
-            PlayableCharacterModel model = root.GetComponent<PlayableCharacterModel>();
-            if (model == null)
-                model = root.AddComponent<PlayableCharacterModel>();
+            // The demo's own subclass, so that the copy of this body that rides the horse
+            // dresses itself - see DemoCharacterModel and DemoMountBuilder.BuildRider.
+            PlayableCharacterModel model = EnsureDemoCharacterModel(root);
             model.animator = animator;
             // The bone map for equipment is read off this renderer, so it has to be one
             // carrying the full skeleton rather than, say, the eyes. A baked outfit has
@@ -204,8 +285,13 @@ namespace MultiplayerARPG.Demo.EditorTools
             // Only players can hold a shot: charging comes from the player controller, so a
             // monster's bow has to be wired to fire in one go instead.
             model.weaponAnimations = DemoAnimationSet.BuildWeaponAnimations(equipmentDriven);
+            // Per-skill clips. Without these every skill in the game animates as the
+            // unarmed set's spell cast - see BuildSkillAnimations for why the weapon set
+            // is not the fallback it looks like it should be.
+            model.skillAnimations = DemoAnimationSet.BuildSkillAnimations();
 
             model.EquipmentContainers = BuildContainers(root, bones, bareParts, equipmentDriven, hair, wardrobe);
+            model.EffectContainers = BuildEffectContainers(root, bones);
 
             WidenBounds(root);
 
@@ -594,6 +680,57 @@ namespace MultiplayerARPG.Demo.EditorTools
             return containers.ToArray();
         }
 
+        /// <summary>
+        /// Builds the sockets a <see cref="GameEffect"/> can be hung on. See
+        /// <see cref="EffectSockets"/> for what they are and why they are not just bones.
+        ///
+        /// The hands reuse the weapon socket's measured grip position but not its rotation:
+        /// the grip is turned to lay a haft along the closed fist, which is the last thing
+        /// you want a spell coming out of.
+        /// </summary>
+        private static EffectContainer[] BuildEffectContainers(GameObject root, Dictionary<string, Transform> bones)
+        {
+            var containers = new List<EffectContainer>();
+            foreach (EffectSocket socket in EffectSockets)
+            {
+                Transform parent = root.transform;
+                if (!string.IsNullOrEmpty(socket.Bone) && !bones.TryGetValue(socket.Bone, out parent))
+                {
+                    Debug.LogWarning($"[{nameof(DemoCharacterBuilder)}] No bone \"{socket.Bone}\" on " +
+                                     $"\"{root.name}\" to hang the \"{socket.Name}\" effect socket from, " +
+                                     "so effects aimed there will not show.");
+                    continue;
+                }
+
+                var go = new GameObject($"FX_{socket.Name}");
+                go.transform.SetParent(parent, false);
+
+                // the grip point is measured, per body, by CreateSocket - so read it back off
+                // the weapon socket rather than measuring the fist a second time
+                Transform grip = FindChild(parent, socket.Name);
+                go.transform.localPosition = grip != null ? grip.localPosition : Vector3.zero;
+                // square to the character, not to the bone
+                go.transform.rotation = root.transform.rotation;
+
+                containers.Add(new EffectContainer
+                {
+                    effectSocket = socket.Name,
+                    transform = go.transform,
+                });
+            }
+            return containers.ToArray();
+        }
+
+        private static Transform FindChild(Transform parent, string name)
+        {
+            foreach (Transform child in parent)
+            {
+                if (child.name == name)
+                    return child;
+            }
+            return null;
+        }
+
         /// <summary>The pose the fist is measured from. Any clip where the hand grips a haft will do.</summary>
         private const string GripPoseClip = "Sword_Idle";
 
@@ -744,6 +881,69 @@ namespace MultiplayerARPG.Demo.EditorTools
                 return Vector3.zero;
             }
             return sum / found * GripAcrossPalm;
+        }
+
+        /// <summary>
+        /// The model prefab at <paramref name="modelPrefabPath"/> carries a
+        /// <see cref="DemoCharacterModel"/> afterwards. A prefab built before that class
+        /// existed has a plain <see cref="PlayableCharacterModel"/>; its script is swapped in
+        /// place, keeping the component's file id and every field, so nothing that points at
+        /// it - the entity's model manager, the entity prefab's overrides - has to change.
+        /// Returns false if the prefab is missing.
+        /// </summary>
+        public static bool EnsureDemoCharacterModel(string modelPrefabPath)
+        {
+            if (AssetDatabase.LoadAssetAtPath<GameObject>(modelPrefabPath) == null)
+                return false;
+            GameObject contents = PrefabUtility.LoadPrefabContents(modelPrefabPath);
+            try
+            {
+                if (contents.GetComponent<DemoCharacterModel>() != null)
+                    return true;
+                EnsureDemoCharacterModel(contents);
+                PrefabUtility.SaveAsPrefabAsset(contents, modelPrefabPath);
+                Debug.Log($"[{nameof(DemoCharacterBuilder)}] \"{modelPrefabPath}\" now carries a {nameof(DemoCharacterModel)}.");
+                return true;
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(contents);
+            }
+        }
+
+        /// <summary>
+        /// The <see cref="DemoCharacterModel"/> on <paramref name="root"/>, added if there is
+        /// no character model, or converted in place if there is a plain playable one.
+        /// </summary>
+        private static DemoCharacterModel EnsureDemoCharacterModel(GameObject root)
+        {
+            var demoModel = root.GetComponent<DemoCharacterModel>();
+            if (demoModel != null)
+                return demoModel;
+            var model = root.GetComponent<PlayableCharacterModel>();
+            if (model == null)
+                return root.AddComponent<DemoCharacterModel>();
+            // Same component, new script: the subclass adds no fields, so everything
+            // serialized carries over, and the file id survives for whatever references it.
+            MonoScript script = null;
+            foreach (string guid in AssetDatabase.FindAssets($"t:MonoScript {nameof(DemoCharacterModel)}"))
+            {
+                var candidate = AssetDatabase.LoadAssetAtPath<MonoScript>(AssetDatabase.GUIDToAssetPath(guid));
+                if (candidate != null && candidate.GetClass() == typeof(DemoCharacterModel))
+                {
+                    script = candidate;
+                    break;
+                }
+            }
+            if (script == null)
+            {
+                Debug.LogError($"[{nameof(DemoCharacterBuilder)}] Cannot find the {nameof(DemoCharacterModel)} script asset.");
+                return null;
+            }
+            var serialized = new SerializedObject(model);
+            serialized.FindProperty("m_Script").objectReferenceValue = script;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            return root.GetComponent<DemoCharacterModel>();
         }
 
         private static GameObject InstantiateUnpacked(string prefabPath)

@@ -1,3 +1,4 @@
+﻿using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
 
@@ -89,11 +90,12 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// <summary>
         /// The three things a new character can be.
         ///
-        /// They are told apart by what they fight with rather than by skills, because the
-        /// demo has no skills yet: the warrior swings a sword, the ranger looses arrows and
-        /// the mage throws bolts, and those are three different weapon types with three
-        /// different ranges. The health and mana pools lean the same way, so the mage cannot
-        /// simply stand in the open and out-trade a warrior.
+        /// They are told apart three ways. By what they fight with: the warrior swings a
+        /// sword, the ranger looses arrows and the mage throws bolts, which is three weapon
+        /// types at three ranges. By their pools, which lean the same way, so the mage
+        /// cannot simply stand in the open and out-trade a warrior. And by their four
+        /// skills each, from <see cref="DemoSkillBuilder"/> - one granted at level one and
+        /// three bought with skill points as the character levels.
         ///
         /// All three start in the same peasant clothes. The starting kit is deliberately
         /// poor so that the armour taken off an enemy is worth putting on.
@@ -160,17 +162,36 @@ namespace MultiplayerARPG.Demo.EditorTools
 
                 serialized.FindProperty("startMap").objectReferenceValue = map;
                 serialized.FindProperty("rightHandEquipItem").objectReferenceValue = Item(spec.Weapon);
+                DemoSkillBuilder.WriteClassSkills(serialized, spec.Name);
 
                 var clothes = new Object[StartingClothes.Length];
                 for (int i = 0; i < StartingClothes.Length; ++i)
                     clothes[i] = Item(StartingClothes[i]);
                 SetList(serialized, "armorItems", clothes);
 
+                // Five potions for everyone, and a hundred arrows for whoever starts with a
+                // bow. **The arrows are not a nicety.** The ammo requirement lives on the
+                // Bow weapon type, so from the moment it is set a ranger with an empty
+                // quiver cannot shoot at all - the shot is refused, silently, by
+                // `DecreaseAmmos`. Starting stock, a gold apiece at Marek's and a craft
+                // recipe are the three things between that rule and a class that does not
+                // work. Keyed off the class's own starting weapon rather than its name, so
+                // a second bow class would be armed too.
+                var starting = new List<KeyValuePair<string, int>>
+                {
+                    new KeyValuePair<string, int>("MinorHealingPotion", 5),
+                };
+                if (spec.Weapon == "HuntingBow" || spec.Weapon == "YewLongbow")
+                    starting.Add(new KeyValuePair<string, int>(DemoSuppliesBuilder.ArrowItem, 100));
+
                 SerializedProperty startItems = serialized.FindProperty("startItems");
-                startItems.arraySize = 1;
-                SerializedProperty first = startItems.GetArrayElementAtIndex(0);
-                first.FindPropertyRelative("item").objectReferenceValue = Item("MinorHealingPotion");
-                first.FindPropertyRelative("amount").intValue = 5;
+                startItems.arraySize = starting.Count;
+                for (int i = 0; i < starting.Count; ++i)
+                {
+                    SerializedProperty entry = startItems.GetArrayElementAtIndex(i);
+                    entry.FindPropertyRelative("item").objectReferenceValue = Item(starting[i].Key);
+                    entry.FindPropertyRelative("amount").intValue = starting[i].Value;
+                }
 
                 serialized.ApplyModifiedPropertiesWithoutUndo();
                 EditorUtility.SetDirty(asset);
@@ -196,6 +217,44 @@ namespace MultiplayerARPG.Demo.EditorTools
             /// <summary>Gold for a kill at level one, and how much more each level adds.</summary>
             public float Gold;
             public float GoldPerLevel;
+            /// <summary>
+            /// How it behaves when it sees a player. Left at the default `Normal` a monster
+            /// fights back once struck; `NoHarm` never fights at all, which is what makes
+            /// the deer game rather than an enemy.
+            /// </summary>
+            public MonsterCharacteristic Characteristic;
+            /// <summary>
+            /// Game rather than an enemy: it drops only what came off its own body, with
+            /// none of the insignia and potions that a bandit is carrying because it is a
+            /// person with pockets.
+            /// </summary>
+            public bool Quarry;
+            /// <summary>
+            /// What it hits for at level one, and how much each level adds.
+            ///
+            /// **These were never written until 2026-09-16, and the kit's default is zero** -
+            /// so every monster but the bandit, whose asset had been tuned by hand, walked up
+            /// to the player and dealt no damage at all. A marauder, a cultist and the crypt's
+            /// boss were all harmless.
+            /// </summary>
+            public float DamageMin, DamageMax, DamagePerLevel;
+            /// <summary>
+            /// The family's own trophy - its common drop, and what the merchant buys. Empty
+            /// means the bandit insignia, which is what every human enemy dropped until
+            /// 2026-09-16, cultists and the crypt's master included.
+            /// </summary>
+            public string Token;
+            /// <summary>
+            /// How far it can reach. Zero means the bandit's 1.5m, which suits anything
+            /// man-sized swinging something.
+            ///
+            /// The companion trap: `MonsterCharacter` carries its own `damageInfo`, whose
+            /// `startAttackDistance` defaults to **0.5**, and `Damage.GetDistance()` returns
+            /// `min(hitDistance, startAttackDistance)` whenever that is above zero. Left alone,
+            /// every monster in the demo would only attack from half a metre - closer than two
+            /// capsules can stand. It is written as 0.85 of the reach here, as the weapons are.
+            /// </summary>
+            public float HitDistance;
         }
 
         /// <summary>
@@ -217,14 +276,19 @@ namespace MultiplayerARPG.Demo.EditorTools
             new MonsterSpec { Name = "BaseEnemy", Title = "Bandit", Weapon = "BanditAxe",
                 Hp = 55f, HpPerLevel = 18f, MoveSpeed = 3.6f, AtkSpeed = 0.85f, VisualRange = 14f,
                 Exp = 9f, ExpPerLevel = 2.5f, Gold = 3f, GoldPerLevel = 0.8f,
+                DamageMin = 4f, DamageMax = 8f, DamagePerLevel = 2f, HitDistance = 1.5f,
                 Loot = new[] { "RangerBoots", "RangerBracers", "RangerPauldron", "RangerHood", "RangerBreeches", "RangerJerkin", "HuntingBow" } },
             new MonsterSpec { Name = "Marauder", Title = "Marauder", Weapon = "IronLongsword",
                 Hp = 95f, HpPerLevel = 26f, MoveSpeed = 3.2f, AtkSpeed = 0.7f, VisualRange = 15f,
                 Exp = 18f, ExpPerLevel = 4f, Gold = 7f, GoldPerLevel = 1.2f,
+                // Plate and a longsword: the heaviest regular hit on the island, and the longest
+                // reach of the three human families.
+                DamageMin = 7f, DamageMax = 12f, DamagePerLevel = 3f, HitDistance = 1.8f, Token = "MarauderSeal",
                 Loot = new[] { "KnightSabatons", "KnightGauntlets", "KnightPauldrons", "KnightHelm", "KnightGreaves", "KnightCuirass", "IronLongsword" } },
             new MonsterSpec { Name = "Cultist", Title = "Cultist", Weapon = "ApprenticeStaff",
                 Hp = 45f, HpPerLevel = 14f, MoveSpeed = 3.4f, AtkSpeed = 1.0f, VisualRange = 16f,
                 Exp = 16f, ExpPerLevel = 3.5f, Gold = 6f, GoldPerLevel = 1f,
+                DamageMin = 5f, DamageMax = 9f, DamagePerLevel = 2.2f, HitDistance = 1.6f, Token = "CultistSigil",
                 Loot = new[] { "WizardShoes", "WizardSleeves", "WizardTrousers", "WizardRobe", "ElderStaff" } },
             // The crypt's master. Five times a cultist's health at the same level and a
             // faster staff, so at the level the crypt is pitched at - ten - the fight is
@@ -234,7 +298,68 @@ namespace MultiplayerARPG.Demo.EditorTools
             new MonsterSpec { Name = "Hierophant", Title = "Hierophant", Weapon = "ElderStaff",
                 Hp = 240f, HpPerLevel = 45f, MoveSpeed = 3.6f, AtkSpeed = 1.15f, VisualRange = 18f,
                 Exp = 135f, ExpPerLevel = 15f, Gold = 55f, GoldPerLevel = 6f,
+                // No harder a single blow than a cultist's, relative to the level the crypt is
+                // pitched at - the danger is his guard and his health, as the note above says.
+                DamageMin = 10f, DamageMax = 16f, DamagePerLevel = 4f, HitDistance = 2f, Token = "CultistSigil",
                 Loot = new[] { "WizardRobe", "ElderStaff", "WizardSleeves", "WizardTrousers", "WizardShoes" }, LootRate = 0.30f },
+            // The island's game. Not an enemy: a deer never fights, and `NoHarm` is how the
+            // kit says so — it wanders, it can be shot, and it will not turn on the player.
+            // `DemoFlee` on the entity gives it the one thing the kit has no setting for,
+            // which is the sense to run once it has been hit.
+            //
+            // Cheap to kill and cheap to lose. The health is a couple of arrows' worth and
+            // the experience deliberately slight, because hunting is meant to be a living
+            // rather than a way to level: it is the hide and the venison that pay, and they
+            // drop nearly every time, unlike armour off a body.
+            new MonsterSpec { Name = "Deer", Title = "Deer", Weapon = null,
+                Hp = 30f, HpPerLevel = 6f, MoveSpeed = 6.5f, AtkSpeed = 1f, VisualRange = 18f,
+                Exp = 4f, ExpPerLevel = 1f, Gold = 0f, GoldPerLevel = 0f,
+                Characteristic = MonsterCharacteristic.NoHarm, Quarry = true,
+                Loot = new[] { "Venison", "DeerHide" }, LootRate = 0.85f },
+            // The first thing on the island that will actually fight a new character.
+            //
+            // Everything else that fights is a person, and the weakest of those - a level
+            // one bandit - has 55 health and an axe. A character who walks out of the
+            // village at level one has no business meeting that yet, and until the wolves
+            // there was nothing between the green and it: the first enemy a player met was
+            // whichever band they happened to walk into, several levels above them.
+            //
+            // So the wolf is pitched deliberately below a bandit at every level: half the
+            // health, no weapon, and a bite rather than an axe. It is `Aggressive` where
+            // the people are `Normal`, which reverses who starts the fight - a bandit
+            // stands in its field until struck, a wolf comes at you - and that is the whole
+            // point of it. A low-level enemy nobody can find is not a low-level enemy. Its
+            // sight is kept short (12m against a bandit's 14) so that coming at you stays
+            // its decision from close by rather than a charge across the fields.
+            //
+            // No gold: a wolf has no pockets. What it leaves is off its own body, like the
+            // deer's, and worth less - see BuildQuarry.
+            new MonsterSpec { Name = "Wolf", Title = "Wolf", Weapon = null,
+                Hp = 28f, HpPerLevel = 8f, MoveSpeed = 4.2f, AtkSpeed = 1.15f, VisualRange = 12f,
+                Exp = 6f, ExpPerLevel = 1.5f, Gold = 0f, GoldPerLevel = 0f,
+                Characteristic = MonsterCharacteristic.Aggressive, Quarry = true,
+                // Under a bandit here too, and a short reach because a bite is short. It starts
+                // the fight, so it must be the gentlest thing that does.
+                DamageMin = 3f, DamageMax = 6f, DamagePerLevel = 1.6f, HitDistance = 1.4f,
+                Loot = new[] { "WolfPelt", "WolfFang" }, LootRate = 0.55f },
+            // The pet, which is a monster in every way the kit cares about and in no way
+            // the player does. Summoned by the Pup's Collar, it fights whatever its owner
+            // fights and dies like anything else.
+            //
+            // **Nothing, exp or gold, for killing it**, and no loot. A summoned creature
+            // carrying a reward is a creature somebody farms: a player could summon, kill
+            // and re-summon their own pet for pelts. That is not a hypothetical the demo
+            // has to survive, but a reward table on a thing the player spawns at will is
+            // wrong in a way that is easier to avoid than to notice.
+            //
+            // Pitched under the wolf it grows out of - a pup, not a wolf on a lead - so it
+            // helps a level-one character without fighting for them.
+            new MonsterSpec { Name = "WolfPup", Title = "Wolf Pup", Weapon = null,
+                Hp = 22f, HpPerLevel = 7f, MoveSpeed = 4.6f, AtkSpeed = 1.2f, VisualRange = 10f,
+                Exp = 0f, ExpPerLevel = 0f, Gold = 0f, GoldPerLevel = 0f,
+                Characteristic = MonsterCharacteristic.Aggressive,
+                DamageMin = 2f, DamageMax = 4f, DamagePerLevel = 1.2f, HitDistance = 1.2f,
+                Loot = new string[0] },
         };
 
         /// <summary>
@@ -305,6 +430,20 @@ namespace MultiplayerARPG.Demo.EditorTools
                 Stat(serialized, "stats.baseStats.hpRecovery", MonsterRegenPerSecond - spec.Hp * regenRate);
                 Stat(serialized, "stats.statsIncreaseEachLevel.hpRecovery", -spec.HpPerLevel * regenRate);
                 Stat(serialized, "visualRange", spec.VisualRange);
+
+                // What it hits for, and how far it can reach to do it. Both were left at the
+                // kit's defaults until 2026-09-16 - zero damage, and a half-metre reach that
+                // two capsules cannot close - so only the bandit, whose asset had been tuned
+                // by hand, could fight at all. See the MonsterSpec fields for the mechanism.
+                float reach = spec.HitDistance > 0f ? spec.HitDistance : 1.5f;
+                Stat(serialized, "damageInfo.hitDistance", reach);
+                Stat(serialized, "damageInfo.hitFov", 90f);
+                Stat(serialized, "damageInfo.startAttackDistance", reach * 0.85f);
+                Stat(serialized, "damageAmount.amount.baseAmount.min", spec.DamageMin);
+                Stat(serialized, "damageAmount.amount.baseAmount.max", spec.DamageMax);
+                Stat(serialized, "damageAmount.amount.amountIncreaseEachLevel.min", spec.DamagePerLevel);
+                Stat(serialized, "damageAmount.amount.amountIncreaseEachLevel.max", spec.DamagePerLevel);
+
                 Stat(serialized, "randomExp.baseAmount.min", Mathf.Round(spec.Exp * 0.9f));
                 Stat(serialized, "randomExp.baseAmount.max", Mathf.Round(spec.Exp * 1.1f));
                 Stat(serialized, "randomExp.amountIncreaseEachLevel.min", spec.ExpPerLevel);
@@ -315,11 +454,21 @@ namespace MultiplayerARPG.Demo.EditorTools
                 Stat(serialized, "randomGold.amountIncreaseEachLevel.max", spec.GoldPerLevel);
                 SerializedProperty weapon = serialized.FindProperty("rightHandEquipItem");
                 if (weapon != null)
-                    weapon.objectReferenceValue = Item(spec.Weapon);
+                    weapon.objectReferenceValue = string.IsNullOrEmpty(spec.Weapon) ? null : Item(spec.Weapon);
+                SerializedProperty characteristic = serialized.FindProperty("characteristic");
+                if (characteristic != null)
+                    characteristic.enumValueIndex = (int)spec.Characteristic;
+                // What it does while nothing has roused it. The kit flags a wandering
+                // monster `IsWalking`, so this is the pace of the walk animation as well as
+                // the speed; a deer drifting between grazing spots moves slower than a
+                // bandit on patrol.
+                if (spec.Quarry)
+                    Stat(serialized, "wanderMoveSpeed", 1.1f);
+                DemoSkillBuilder.WriteMonsterSkills(serialized, spec.Name);
                 serialized.ApplyModifiedPropertiesWithoutUndo();
                 EditorUtility.SetDirty(asset);
 
-                WriteDrops(asset, spec.Loot, spec.LootRate > 0f ? spec.LootRate : 0.10f);
+                WriteDrops(asset, spec.Loot, spec.LootRate > 0f ? spec.LootRate : 0.10f, spec.Quarry, spec.Token);
             }
         }
 
@@ -349,8 +498,12 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// first kill hands over. The insignia is the common drop that gives the merchant a
         /// reason to exist, and a potion often enough that the next fight is not gated on
         /// walking home.
+        ///
+        /// Game is the exception, and takes neither of those two: a deer is not carrying a
+        /// bandit's token or a bottle of physic. It drops what came off its own body, and
+        /// it drops it reliably, because a hunt that usually yields nothing is not a living.
         /// </summary>
-        private static void WriteDrops(ScriptableObject monsterData, string[] loot, float rate)
+        private static void WriteDrops(ScriptableObject monsterData, string[] loot, float rate, bool quarry = false, string token = null)
         {
             var serialized = new SerializedObject(monsterData);
             SerializedProperty list = serialized.FindProperty("itemDropManager.randomItems");
@@ -360,11 +513,15 @@ namespace MultiplayerARPG.Demo.EditorTools
                 return;
             }
 
-            list.arraySize = 2 + loot.Length;
-            WriteDrop(list.GetArrayElementAtIndex(0), "BanditInsignia", 0.55f, 2);
-            WriteDrop(list.GetArrayElementAtIndex(1), "MinorHealingPotion", 0.30f, 2);
+            int carried = quarry ? 0 : 2;
+            list.arraySize = carried + loot.Length;
+            if (!quarry)
+            {
+                WriteDrop(list.GetArrayElementAtIndex(0), string.IsNullOrEmpty(token) ? "BanditInsignia" : token, 0.55f, 2);
+                WriteDrop(list.GetArrayElementAtIndex(1), "MinorHealingPotion", 0.30f, 2);
+            }
             for (int i = 0; i < loot.Length; ++i)
-                WriteDrop(list.GetArrayElementAtIndex(2 + i), loot[i], Mathf.Max(0.025f, rate - i * rate * 0.12f), 1);
+                WriteDrop(list.GetArrayElementAtIndex(carried + i), loot[i], Mathf.Max(0.025f, rate - i * rate * 0.12f), 1);
 
             // At most three of those at once, so a kill is a handful rather than a haul.
             serialized.FindProperty("itemDropManager.minDropItems").intValue = 1;
@@ -446,6 +603,16 @@ namespace MultiplayerARPG.Demo.EditorTools
                 Component<BaseMonsterCharacterEntity>($"{EntityDir}/DemoCultistMale.prefab"),
                 Component<BaseMonsterCharacterEntity>($"{EntityDir}/DemoCultistFemale.prefab"),
                 Component<BaseMonsterCharacterEntity>($"{EntityDir}/DemoHierophant.prefab"),
+                // The island's game. A monster to the kit, which is how it can be shot and
+                // looted, but a harmless one — see the Deer spec above.
+                Component<BaseMonsterCharacterEntity>($"{EntityDir}/DemoDeer.prefab"),
+                // The starter enemy, and the only one that is not a person.
+                Component<BaseMonsterCharacterEntity>($"{EntityDir}/DemoWolf.prefab"),
+                // The pet. It has to be in this list like any other monster entity - the
+                // `PetItem` registers the prefab through `PrepareRelatesData` as well, but
+                // a summoned creature the database does not know is one the client cannot
+                // spawn.
+                Component<BaseMonsterCharacterEntity>($"{EntityDir}/DemoWolfPup.prefab"),
             });
             // Every map the game can put a character on. The island is the start map by
             // being first; the crypt is only reached through its door.
@@ -466,12 +633,36 @@ namespace MultiplayerARPG.Demo.EditorTools
             SetList(serialized, "items", DemoItemBuilder.AllItems().ToArray());
             SetList(serialized, "weaponTypes", DemoItemBuilder.AllOfType("WeaponTypes", "t:WeaponType").ToArray());
             SetList(serialized, "armorTypes", DemoItemBuilder.AllOfType("ArmorTypes", "t:ArmorType").ToArray());
+            // The twelve skills. A skill left out of this list has no data id, so a class
+            // that lists it has nothing to grant and nothing to offer for a skill point -
+            // the skill window simply comes up empty, with no error to say why.
+            SetList(serialized, "skills", DemoSkillBuilder.AllSkills().ToArray());
+            // Last, because the Hierophant's summon points at a character entity that did
+            // not exist yet when the skills were built - see WireSummons.
+            DemoSkillBuilder.WireSummons();
             // NPC dialogs are not listed here; the kit collects those from the
             // NpcDatabase when it walks each map's NPCs.
             SetList(serialized, "quests", DemoNpcBuilder.AllQuests().ToArray());
             // The harvestable definitions. Their entity prefabs are not listed here — the
             // spawn areas in the map register those themselves when the scene loads.
             SetList(serialized, "harvestables", DemoHarvestBuilder.AllHarvestables().ToArray());
+            // What a founded guild has to spend its levels on and to fly over itself. The
+            // guild system was never off - the settings, the roles, the exp tree and the
+            // windows were all there - these two lists were simply empty, so a guild
+            // collected a skill point a level and had nothing to buy with it.
+            SetList(serialized, "guildSkills", DemoGuildBuilder.AllSkills().ToArray());
+            SetList(serialized, "guildIcons", DemoGuildBuilder.AllIcons().ToArray());
+            // The arrows' type. `AmmoItem.PrepareRelatesData` registers it anyway, the way
+            // the horse's vehicle entity is registered by the whistle - listing it here as
+            // well costs nothing and means the database says what the game has rather than
+            // leaving a reader to find it hanging off an item.
+            SetList(serialized, "ammoTypes", DemoSuppliesBuilder.AllAmmoTypes().ToArray());
+            // The elements everything now deals and resists, and the ailments the mage's
+            // two elemental skills and the ranger's mark leave behind. Equipment sets are
+            // deliberately not listed: there is no list for them, because an item registers
+            // its own set through `PrepareRelatesData`.
+            SetList(serialized, "damageElements", DemoCombatDataBuilder.AllElements().ToArray());
+            SetList(serialized, "statusEffects", DemoCombatDataBuilder.AllStatusEffects().ToArray());
             WriteClock();
 
             serialized.ApplyModifiedPropertiesWithoutUndo();
@@ -541,6 +732,12 @@ namespace MultiplayerARPG.Demo.EditorTools
             foreach (string guid in AssetDatabase.FindAssets("t:AudioClip", new[] { AudioDir }))
             {
                 string path = AssetDatabase.GUIDToAssetPath(guid);
+                // The music is the one thing here that must NOT be resident: two tracks of
+                // three minutes are about 64 MB of PCM between them, held for the session, to
+                // save a stall under a piece that fades in over two seconds. DemoAudioWiring
+                // sets them to stream instead, and this would undo it on every run.
+                if (DemoAudioWiring.IsMusic(System.IO.Path.GetFileNameWithoutExtension(path)))
+                    continue;
                 var importer = AssetImporter.GetAtPath(path) as AudioImporter;
                 if (importer == null)
                     continue;
@@ -577,7 +774,7 @@ namespace MultiplayerARPG.Demo.EditorTools
             GameObject gatePrefab = AssetDatabase.LoadAssetAtPath<GameObject>(DemoDungeonBuilder.GatePrefabPath);
             if (dungeon == null || gatePrefab == null)
             {
-                Debug.LogWarning($"[{nameof(DemoDatabaseWiring)}] No dungeon to wire: run Open MMORPG > Demo > Build Dungeon Scene first.");
+                Debug.LogWarning($"[{nameof(DemoDatabaseWiring)}] No dungeon to wire: run Open MMORPG > Demo > Regenerate Dungeon Scene first.");
                 return;
             }
             var gate = gatePrefab.GetComponent<WarpPortalEntity>();

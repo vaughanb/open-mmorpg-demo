@@ -48,7 +48,17 @@ namespace MultiplayerARPG.Demo.EditorTools
     {
         public const string DemoDir = "Assets/OpenMMORPG/Demo";
         public const string ArtDir = DemoDir + "/Art";
-        public const string ClipDir = ArtDir + "/Animations";
+        /// <summary>
+        /// Where extracted library clips land. Deliberately **not** under `Art/`, unlike
+        /// every other collected asset: the demo also authors animation of its own - the
+        /// Mixamo skill clips and the generated bow shot - and having half the animation
+        /// in `Demo/Art/Animations` and half in `Demo/Animations` meant neither folder
+        /// answered "where are the animations". They are all in the second one now.
+        ///
+        /// Nothing about self-containment depends on the split: `Verify` counts anything
+        /// under `Demo/` as inside, not anything under `Demo/Art/`.
+        /// </summary>
+        public const string ClipDir = DemoDir + "/Animations";
         private const string KitDir = "Assets/OpenMMORPG/";
 
         /// <summary>
