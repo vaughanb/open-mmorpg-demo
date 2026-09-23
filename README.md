@@ -213,6 +213,13 @@ Each step consumes the previous one's output, so run them in this order:
     `CanvasGlobal`/`CanvasHome`. Independent of the rest; re-run after changing the
     backdrop art.
 14. `Open MMORPG > Demo > Build Player Controller`
+14a. `Open MMORPG > Demo > Build Feedback Effects` - the in-world feedback the template left
+    broken: animator controllers for the six damage/heal numbers (they sat at alpha 0 with no
+    controller, so none ever showed) and for the level-up flourish; the click-to-move ring
+    (`TargetObject.prefab`, a legacy Projector URP never drew), laid to the slope by
+    `DemoGroundMarker`; and the safe-area and vending signs, hung over the nameplate by
+    `DemoNameplateSign` instead of lying at the feet. Edits those prefabs in place and points
+    the demo controller at the ring, so it can run before or after step 14.
 14b. `Open MMORPG > Demo > Wire Audio` — hooks the clips under `Demo/Audio` up by file-name
     family (Footstep*, SwordSwing*, ArrowFire*, ManHit*/WomanHit*, ...) to the character
     entities, the horse, the character models and the weapon items, and logs the families

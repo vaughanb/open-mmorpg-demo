@@ -16,7 +16,8 @@ namespace MultiplayerARPG.Demo.EditorTools
     /// the shooter build is kept under its own menu item as the way back to
     /// over-the-shoulder aiming.
     ///
-    /// Either way there is no click-to-move and no click-to-talk, so NPCs, loot and
+    /// Either way there is no click-to-talk, and no click-to-move unless the player turns it
+    /// on in the settings dialog, so NPCs, loot and
     /// harvestables are reached by walking up and pressing the activate key. The kit's own
     /// detectors handle that, at the ranges `GameInstance` already carries (3m to talk,
     /// 2m to pick up).
@@ -57,8 +58,12 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// field across - the camera prefabs, the target marker, the UI blocking rules -
         /// then sets what the demo does differently: both schemes on so a click selects
         /// while WASD moves; no first-click attack, so a left click only targets; Tab
-        /// reaching thirty metres and a target kept to forty; and no ground marker, since
-        /// the controller cancels ground clicks.
+        /// reaching thirty metres and a target kept to forty; and the destination ring from
+        /// <see cref="DemoFeedbackBuilder"/> as the ground marker. The controller cancels
+        /// ground clicks unless the click-to-move setting is on, and the kit shows the marker
+        /// only while there is a destination, so it appears with that setting and not
+        /// otherwise. (It used to be cleared here, when there was no such setting - which
+        /// left click-to-move with no marker once there was.)
         /// </summary>
         [MenuItem("Open MMORPG/Demo/Build Player Controller")]
         public static void Build()
@@ -92,7 +97,8 @@ namespace MultiplayerARPG.Demo.EditorTools
                 serialized.FindProperty("wasdLockAttackTarget").boolValue = true;
                 serialized.FindProperty("distanceToLockActionTarget").floatValue = 30f;
                 serialized.FindProperty("wasdClearTargetDistance").floatValue = 40f;
-                serialized.FindProperty("targetObjectPrefab").objectReferenceValue = null;
+                serialized.FindProperty("targetObjectPrefab").objectReferenceValue =
+                    AssetDatabase.LoadAssetAtPath<GameObject>(DemoFeedbackBuilder.MarkerPath);
                 serialized.ApplyModifiedPropertiesWithoutUndo();
 
                 GameObject saved = PrefabUtility.SaveAsPrefabAsset(root, PlayerControllerPath);
