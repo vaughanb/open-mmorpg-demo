@@ -1,4 +1,5 @@
 ﻿using MultiplayerARPG.GameData.Model.Playables;
+using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.AI;
@@ -24,8 +25,37 @@ namespace MultiplayerARPG.Demo.EditorTools
         private const string ModelDir = "Assets/OpenMMORPG/Demo/Prefabs/GamePlay/CharacterModels";
         private const string MonsterDir = "Assets/OpenMMORPG/Demo/GameData/Resources/MonsterCharacters";
 
+        /// <summary>
+        /// The two prefabs every entity here is cloned from. **They are tooling, not
+        /// content**: nothing in the game references them, nothing spawns them, and they
+        /// appear in no database - so an asset sweep that goes by "is anything pointing at
+        /// this" will take them, and on 2026-09-23 something had already taken
+        /// `BaseCharacter.prefab`. Both are tracked in the kit repo, so the way back is
+        /// `git checkout -- Demo/Prefabs/GamePlay/CharacterEntities/BaseCharacter.prefab*`
+        /// from `Assets/OpenMMORPG`.
+        ///
+        /// They are allowed to be old. `Build` strips the arrangement they carry - the
+        /// placeholder capsule, the model component on the root - and the later steps of
+        /// the pipeline put back what they never had, so a template from months ago still
+        /// produces a current entity. See <see cref="Build"/> for what is added on top.
+        /// </summary>
         private const string PlayerTemplate = EntityDir + "/BaseCharacter.prefab";
         private const string EnemyTemplate = EntityDir + "/BaseEnemy.prefab";
+
+        /// <summary>
+        /// Whether a prefab in the entity folder is one of the two templates.
+        ///
+        /// **A template is an input and must never be written to.** It lives in the same
+        /// folder as the entities, and `BaseCharacter.prefab` carries a real
+        /// `PlayerCharacterEntity`, so a sweep that says "every player prefab in this
+        /// folder" picks it up and edits it - which is how it came to be carrying a
+        /// `DemoSkinTone` it has no use for and showing as modified in the kit repo.
+        /// Every folder sweep here should skip these two.
+        /// </summary>
+        public static bool IsTemplate(string assetPath)
+        {
+            return assetPath == PlayerTemplate || assetPath == EnemyTemplate;
+        }
 
         /// <summary>
         /// How long a dead monster lies there, and how long its loot lasts. **One number for both**
@@ -218,6 +248,39 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// player holding the same sword does, and a change to the item's grip reaches
         /// both the next time they are built.
         /// </summary>
+        /// <summary>
+        /// How far an NPC lowers a weapon from the grip a player wields it with, in degrees
+        /// about the weapon's own Z - the blade's flat normal, so the blade drops within
+        /// the plane of its edges and the flat keeps facing the leg.
+        ///
+        /// **A grip is judged against a stance, and the guards never take that stance.**
+        /// The sword's grip was captured with the body in `Sword_Idle`, arm up and wrist
+        /// set, which is how a player holds it. An NPC has no equipped weapon for the kit
+        /// to pick a weapon set with, so the guards play the *unarmed* `Idle_Loop` and
+        /// `Walk_Loop` - relaxed arms - with that same grip in the hand. Measured on the
+        /// guard's rig: in the idle the blade pointed 15 degrees **above** horizontal,
+        /// straight out in front, and mid-stride it swung up to 48 above. That was the
+        /// sword that read wrong side-on.
+        ///
+        /// Minus 48 is measured, not picked. Sampling both clips and scanning the drop:
+        /// the idle rests at 31-35 degrees below horizontal, the walk swings 0-50, and the
+        /// tip clears the ground by 11cm at the bottom of the back-swing (33cm at rest). A
+        /// steeper drop reads more relaxed and puts the tip into the ground mid-stride -
+        /// at 40 degrees it clears by 4cm, past that it goes through. The one cost is the
+        /// handle, which now crosses the fist at 48 degrees to the line it was captured
+        /// on; at a guard's distance that is a wrist, and a sword pointing at the player
+        /// is not.
+        ///
+        /// Relative to the item's grip rather than an absolute rotation, so re-tuning the
+        /// player's grip on the animation bench carries the guards with it. It is a
+        /// rotation about the weapon's own axis, so if a re-tune flips the blade over,
+        /// flip the sign here too.
+        /// </summary>
+        private static readonly Dictionary<string, float> CarryTilt = new Dictionary<string, float>
+        {
+            { "IronLongsword", -48f },
+        };
+
         private static void Arm(GameObject modelInstance, string itemName)
         {
             var item = AssetDatabase.LoadAssetAtPath<BaseItem>($"Assets/OpenMMORPG/Demo/GameData/Resources/Items/{itemName}.asset");
@@ -244,6 +307,9 @@ namespace MultiplayerARPG.Demo.EditorTools
             var held = (GameObject)PrefabUtility.InstantiatePrefab(prefab, container);
             held.transform.localPosition = model.FindPropertyRelative("localPosition").vector3Value;
             held.transform.localEulerAngles = model.FindPropertyRelative("localEulerAngles").vector3Value;
+            float tilt;
+            if (CarryTilt.TryGetValue(itemName, out tilt))
+                held.transform.localRotation *= Quaternion.Euler(0f, 0f, tilt);
             Vector3 scale = model.FindPropertyRelative("localScale").vector3Value;
             held.transform.localScale = scale == Vector3.zero ? Vector3.one : scale;
         }
@@ -370,9 +436,22 @@ namespace MultiplayerARPG.Demo.EditorTools
         {
             GameObject template = AssetDatabase.LoadAssetAtPath<GameObject>(templatePath);
             GameObject model = AssetDatabase.LoadAssetAtPath<GameObject>(modelPath);
-            if (template == null || model == null)
+            if (template == null)
             {
-                Debug.LogError($"[{nameof(DemoEntityBuilder)}] Missing template \"{templatePath}\" or model \"{modelPath}\".");
+                // Said separately from the model, and said fully, because this one is
+                // recoverable and reads like a dead end otherwise: it fired twice into a
+                // busy log and the two player entities were quietly not rebuilt.
+                Debug.LogError($"[{nameof(DemoEntityBuilder)}] No template at \"{templatePath}\". " +
+                               "It is tracked in the kit repo and nothing references it, so a cleanup " +
+                               "pass can delete it without anything noticing. Restore it with " +
+                               "`git checkout -- Demo/Prefabs/GamePlay/CharacterEntities/` from " +
+                               $"Assets/OpenMMORPG. Nothing was written for {outputPath}.");
+                return;
+            }
+            if (model == null)
+            {
+                Debug.LogError($"[{nameof(DemoEntityBuilder)}] No model at \"{modelPath}\". " +
+                               $"Nothing was written for {outputPath}.");
                 return;
             }
 

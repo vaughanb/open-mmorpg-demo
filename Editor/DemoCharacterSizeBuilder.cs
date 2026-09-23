@@ -95,6 +95,10 @@ namespace MultiplayerARPG.Demo.EditorTools
             foreach (string guid in AssetDatabase.FindAssets("t:Prefab", new[] { EntityDir }))
             {
                 string path = AssetDatabase.GUIDToAssetPath(guid);
+                // The template carries a PlayerCharacterEntity, so the "players only" test
+                // below passes for it. It is an input, not an entity - see IsTemplate.
+                if (DemoEntityBuilder.IsTemplate(path))
+                    continue;
                 GameObject root = PrefabUtility.LoadPrefabContents(path);
                 try
                 {
