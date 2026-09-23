@@ -128,6 +128,7 @@ namespace MultiplayerARPG.Demo.EditorTools
             string[] guardArms = { "IronLongsword", "PaintedRoundShield" };
             BuildNpc($"{ModelDir}/GuardModel_Male.prefab", $"{EntityDir}/DemoGuard.prefab", guardArms, false);
             BuildNpc($"{ModelDir}/GuardModel_Male.prefab", $"{EntityDir}/DemoPatrolGuard.prefab", guardArms, true);
+            EnsureEntitySetting();
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();
         }
@@ -280,6 +281,89 @@ namespace MultiplayerARPG.Demo.EditorTools
         {
             { "IronLongsword", -48f },
         };
+
+        /// <summary>The player skill that dashes, and the empty child its handler moves.</summary>
+        private const string DashSkill = "Charge";
+        private const string DashAnchorName = "DashHop";
+
+        /// <summary>
+        /// Gives a player the handler that makes Charge land its hit.
+        ///
+        /// **Charge never dealt its arrival damage until 2026-09-23.** The skill is set up for
+        /// it - a 2.5m post-dash lookup and 10-15 damage - but `SimpleDashAttackSkill` only
+        /// gets told the dash has ended through a `DashAttackHandler` on the character,
+        /// configured for that one skill: `sourceType` Skill, `sourceDataId` the skill's id,
+        /// and a transform to animate. The kit's entity setting does add a handler to every
+        /// player, but a blank one, which switches itself off in `Start` - so the dash closed
+        /// the distance and the damage never came. Measured live: 9.1m closed to 1.3m, target
+        /// untouched.
+        ///
+        /// Configured here, on the prefab, it is the one the kit's `GetOrAddComponent` finds,
+        /// so no blank handler is added beside it.
+        ///
+        /// **Its transform is an empty child and its curve is flat.** During a dash the kit
+        /// sets that transform's local height straight from `jumpCurve` - not added to the
+        /// resting height, set to it - and the default curve rises to a metre, which is a leap
+        /// attack. Charge is a run. Pointed at the model, even a flat curve would pin its height
+        /// to zero, and `DemoSurfaceSwimmer` moves the model's height too; an empty child moves
+        /// nothing anyone can see. Point it at the model and give it a curve if a skill should
+        /// ever jump.
+        /// </summary>
+        private static void AddChargeHandler(GameObject entity)
+        {
+            BaseSkill skill = DemoSkillBuilder.Asset(DashSkill);
+            if (skill == null)
+            {
+                Debug.LogError($"[{nameof(DemoEntityBuilder)}] No \"{DashSkill}\" skill; run Build Skills first, " +
+                               "or Charge will close the distance and never hit.");
+                return;
+            }
+            Transform anchor = entity.transform.Find(DashAnchorName);
+            if (anchor == null)
+            {
+                anchor = new GameObject(DashAnchorName).transform;
+                anchor.SetParent(entity.transform, false);
+            }
+            var handler = entity.GetComponent<DashAttackHandler>();
+            if (handler == null)
+                handler = entity.AddComponent<DashAttackHandler>();
+            handler.sourceType = ApplyMovementForceSourceType.Skill;
+            handler.sourceDataId = skill.DataId;
+            handler.jumpAnimTransform = anchor;
+            handler.jumpCurve = AnimationCurve.Constant(0f, 1f, 0f);
+        }
+
+        private const string EntitySettingPath = "Assets/OpenMMORPG/Demo/GameData/DemoEntitySetting.asset";
+        private const string GameInstancePath = "Assets/OpenMMORPG/Demo/Prefabs/GameInstance.prefab";
+
+        /// <summary>
+        /// Points GameInstance at the demo's entity setting, which stops monsters being given a
+        /// blank dash handler - see `DemoEntitySetting` for the knockback crash that caused.
+        /// Written to the GameInstance **prefab**, as every GameInstance setting is.
+        /// </summary>
+        private static void EnsureEntitySetting()
+        {
+            var setting = AssetDatabase.LoadAssetAtPath<MultiplayerARPG.Demo.DemoEntitySetting>(EntitySettingPath);
+            if (setting == null)
+            {
+                setting = ScriptableObject.CreateInstance<MultiplayerARPG.Demo.DemoEntitySetting>();
+                AssetDatabase.CreateAsset(setting, EntitySettingPath);
+            }
+            var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(GameInstancePath);
+            GameInstance instance = prefab != null ? prefab.GetComponent<GameInstance>() : null;
+            if (instance == null)
+            {
+                Debug.LogError($"[{nameof(DemoEntityBuilder)}] No GameInstance at {GameInstancePath}.");
+                return;
+            }
+            var serialized = new SerializedObject(instance);
+            SerializedProperty field = serialized.FindProperty("entitySetting");
+            if (field.objectReferenceValue == setting)
+                return;
+            field.objectReferenceValue = setting;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            EditorUtility.SetDirty(prefab);
+        }
 
         private static void Arm(GameObject modelInstance, string itemName)
         {
@@ -493,6 +577,9 @@ namespace MultiplayerARPG.Demo.EditorTools
                 SwimOnSurface(entity);
 
             if (monsterData == null)
+                AddChargeHandler(entity);
+
+            if (monsterData == null)
             {
                 // What a player can choose about this body, read off the model just built.
                 DemoBodyPartBuilder.AddComponents(entity, modelInstance);
@@ -560,6 +647,15 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// of each and the rest can neither be spawned nor chosen, with nothing to say so
         /// beyond the wrong monster turning up. Set from the saved prefab's GUID, the way
         /// the identity itself would for a prefab made by hand.
+        ///
+        /// **Written and saved even when the loaded copy already holds the right id.** The
+        /// identity fills an empty id in `OnValidate` as the new prefab loads, so the loaded
+        /// copy usually has it already - but it marks itself dirty through
+        /// `EditorApplication.delayCall`, which does not run while the editor sits idle
+        /// behind a script or the MCP bridge. An early return on a matching id then left the
+        /// file on disk with `assetId:` empty. Found 2026-09-23 on all seven NPCs, whose
+        /// template carries no id to overwrite, after a rebuild; the monsters were spared
+        /// only because they start from the template's id and so always differ.
         /// </summary>
         internal static void GiveOwnNetworkId(string prefabPath)
         {
@@ -568,8 +664,6 @@ namespace MultiplayerARPG.Demo.EditorTools
             if (identity == null)
                 return;
             string guid = AssetDatabase.AssetPathToGUID(prefabPath);
-            if (identity.AssetId == guid)
-                return;
             var serialized = new SerializedObject(identity);
             serialized.FindProperty("assetId").stringValue = guid;
             serialized.ApplyModifiedPropertiesWithoutUndo();

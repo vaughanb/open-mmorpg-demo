@@ -331,6 +331,9 @@ namespace MultiplayerARPG.Demo.EditorTools
 
                 DemoAudioWiring.WireHorse(entity);
                 GameObject saved = PrefabUtility.SaveAsPrefabAsset(entity, HorsePrefabPath);
+                // The horse is spawned by asset id when the whistle is used, so the id has to
+                // be on disk, not only in the loaded copy the identity fills in by itself.
+                DemoEntityBuilder.GiveOwnNetworkId(HorsePrefabPath);
                 // Forced for the same reason DemoEntityBuilder forces it: the editor's loaded
                 // copy of a prefab is not refreshed by writing a new file over it.
                 AssetDatabase.ImportAsset(HorsePrefabPath, ImportAssetOptions.ForceUpdate);

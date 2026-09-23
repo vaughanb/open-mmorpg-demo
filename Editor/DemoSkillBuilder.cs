@@ -704,7 +704,15 @@ namespace MultiplayerARPG.Demo.EditorTools
             // that it stops where the target is rather than sliding past him.
             Set(serialized, "forceApplierData.speed", 18f);
             Set(serialized, "forceApplierData.deceleration", 12f);
-            Set(serialized, "forceApplierData.duration", 0f);
+            // Only a charge with no target selected uses this: with one, the kit solves the
+            // duration from the distance instead. It must not be zero. The arrival damage
+            // is fired by the entity's `DashAttackHandler` (DemoEntityBuilder) when the
+            // force's elapsed time reaches its duration, and a zero-duration force never
+            // does - it just decelerates until it drops under walking pace and is removed,
+            // and the kit does not call its listeners on the frame the list goes empty. So
+            // a free-aimed charge ran eleven metres and hit nothing. 0.6s is ~8.6m, still at
+            // 11 m/s when it ends, so it always ends on the clock and always lands.
+            Set(serialized, "forceApplierData.duration", 0.6f);
 
             // The damage lands on arrival, not on the way: a charge that hurt everything
             // it passed through would be a better Cleave than Cleave.

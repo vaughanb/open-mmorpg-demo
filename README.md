@@ -115,6 +115,10 @@ Each step consumes the previous one's output, so run them in this order:
    taking `DemoBanditMale`, deleting its `Model` child and stripping the three sound
    components the audio wiring adds per entity; rebuilding the deer from it reproduced
    the existing deer transform-for-transform, which is how it was checked.
+   The step also gives both player bodies a `DashAttackHandler` set up for Charge (without
+   one, Charge's arrival damage never lands), and points the GameInstance prefab at
+   `Demo/GameData/DemoEntitySetting.asset`, which stops the kit adding a blank one to every
+   monster - that blank handler threw a NullReferenceException on every knockback.
 8b. `Open MMORPG > Demo > Build Wildlife` - the deer, the village collie and the wolves.
    After the entities, because it clones `BaseEnemy.prefab`, and **before the island
    scene**, whose spawners reference `DemoWolf.prefab` by asset.

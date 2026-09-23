@@ -176,12 +176,12 @@ namespace MultiplayerARPG.Demo.EditorTools
                 EditorUtility.SetDirty(type);
             }
 
-            AdoptUnarmedIcon();
+            AdoptUnarmed();
         }
 
         /// <summary>
-        /// Puts the drawn fist on `DefaultWeaponItem`, which is the item a character holds
-        /// when it holds nothing.
+        /// Adopts `DefaultWeaponItem`, the item a character holds when it holds nothing: its
+        /// drawn fist icon, and the `Unarmed` weapon type built above.
         ///
         /// **It is the one item in the demo no builder makes.** It came with the kit and
         /// was never adopted, so it sat with an empty `icon` while `Unarmed.png` sat in the
@@ -189,12 +189,19 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// listing the icon folder against the item list. The Equipment Icon Generator
         /// cannot help: it photographs an item's model, and a fist has none.
         ///
-        /// Only the icon is written. Its `id` is empty and its damage comes from the
-        /// `Unarmed` weapon type above, and both of those are the kit's arrangement rather
-        /// than a gap - adopting it further would mean owning an asset the demo did not
-        /// author.
+        /// **Its weapon type was missing, so bare hands never fought as `Unarmed`.** In the kit
+        /// repo's last commit the field pointed at a GUID (`e1f9f192...`) that exists nowhere
+        /// in the project - a template leftover - and it has since been re-serialized as null.
+        /// A weapon with no type falls back to `GameInstance.DefaultWeaponType`, which the kit
+        /// generates at startup with nothing set but a name: its default damage info, not the
+        /// 1.5m reach, 90-degree arc and matching attack distance this builder gives
+        /// `Unarmed` for exactly this hand. Pointed at it from 2026-09-23. Monsters are not
+        /// affected; they fight with their own damage, not the default weapon.
+        ///
+        /// Its empty `id` is left alone: GameInstance references this item directly, never by
+        /// id, and adopting it further would mean owning an asset the demo did not author.
         /// </summary>
-        private static void AdoptUnarmedIcon()
+        private static void AdoptUnarmed()
         {
             var unarmed = AssetDatabase.LoadAssetAtPath<BaseItem>($"{ResourcesDir}/Items/DefaultWeaponItem.asset");
             if (unarmed == null)
@@ -204,6 +211,12 @@ namespace MultiplayerARPG.Demo.EditorTools
             }
             var serialized = new SerializedObject(unarmed);
             AdoptItemIcon(serialized, "Unarmed");
+            var type = Load<WeaponType>($"{ResourcesDir}/WeaponTypes/Unarmed.asset");
+            SerializedProperty field = serialized.FindProperty("weaponType");
+            if (type == null || field == null)
+                Debug.LogError($"[{nameof(DemoItemBuilder)}] Could not give DefaultWeaponItem the Unarmed weapon type.");
+            else
+                field.objectReferenceValue = type;
             serialized.ApplyModifiedPropertiesWithoutUndo();
             EditorUtility.SetDirty(unarmed);
         }
