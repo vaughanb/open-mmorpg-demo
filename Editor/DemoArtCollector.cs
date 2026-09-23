@@ -117,10 +117,12 @@ namespace MultiplayerARPG.Demo.EditorTools
                 var copied = new Dictionary<string, string>();
                 long before = 0;
 
-                string library = DemoAnimationSet.LibraryPath;
+                // The animation libraries are never copied whole - UAL2 alone is 70MB for 134
+                // clips - only the clips the demo plays are extracted from them, below.
+                var libraries = new List<string>(DemoAnimationSet.LibraryPaths);
                 foreach (string source in external)
                 {
-                    if (source == library)
+                    if (libraries.Contains(source))
                         continue;
                     string destination = Destination(source);
                     if (destination == null)
@@ -143,15 +145,18 @@ namespace MultiplayerARPG.Demo.EditorTools
                 AssetDatabase.SaveAssets();
                 AssetDatabase.Refresh();
 
-                if (external.Contains(library))
-                    ExtractClips(library, clipMap);
+                foreach (string library in libraries)
+                {
+                    if (external.Contains(library))
+                        ExtractClips(library, libraries, clipMap);
+                }
 
                 Shrink(copied);
                 AssetDatabase.SaveAssets();
 
-                int rewritten = Rewrite(guidMap, library, clipMap);
+                int rewritten = Rewrite(guidMap, libraries, clipMap);
                 AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
-                int scenes = RemapScenes(guidMap, library, clipMap);
+                int scenes = RemapScenes(guidMap, libraries, clipMap);
 
                 long after = 0;
                 foreach (var pair in copied)
@@ -237,9 +242,32 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// Copies the clips the demo references out of the animation library as standalone
         /// assets, and records which library sub-asset each one stands in for.
         /// </summary>
-        private static void ExtractClips(string library, Dictionary<string, string> clipMap)
+        /// <remarks>
+        /// **Keyed by library and id together, `"guid:fileId"`.** A clip's id inside an FBX is
+        /// derived from its name, so two libraries that share a name share an id: UAL1 and
+        /// UAL2 both have `A_TPose`, with the same id in both. Keyed by id alone, the second
+        /// library's clip would be looked up as the first's.
+        ///
+        /// The extracted file is named after the clip, so a shared name would also make the
+        /// second extraction reuse the first's `.anim` and point at the wrong motion without
+        /// a word. Such a clip is refused instead, with an error, and stays outside the demo
+        /// where `Verify` reports it - loud beats wrong.
+        /// </remarks>
+        private static void ExtractClips(string library, List<string> libraries, Dictionary<string, string> clipMap)
         {
             string libraryGuid = AssetDatabase.AssetPathToGUID(library);
+            var elsewhere = new HashSet<string>();
+            foreach (string other in libraries)
+            {
+                if (other == library || AssetDatabase.LoadAssetAtPath<Object>(other) == null)
+                    continue;
+                foreach (Object asset in AssetDatabase.LoadAllAssetsAtPath(other))
+                {
+                    var clip = asset as AnimationClip;
+                    if (clip != null)
+                        elsewhere.Add(clip.name);
+                }
+            }
             var wanted = new HashSet<string>();
             var pattern = new Regex(@"fileID: (-?\d+), guid: " + libraryGuid);
             foreach (string path in TextAssets())
@@ -260,6 +288,13 @@ namespace MultiplayerARPG.Demo.EditorTools
                 long fileId;
                 if (!AssetDatabase.TryGetGUIDAndLocalFileIdentifier(clip, out guid, out fileId) || !wanted.Contains(fileId.ToString()))
                     continue;
+                if (elsewhere.Contains(clip.name))
+                {
+                    Debug.LogError($"[{nameof(DemoArtCollector)}] \"{clip.name}\" is in more than one animation " +
+                                   $"library, so its extracted copy would be ambiguous. Left in {library}; " +
+                                   "rename it on import or play a different clip.");
+                    continue;
+                }
                 string destination = $"{ClipDir}/{clip.name}.anim";
                 if (AssetDatabase.LoadAssetAtPath<AnimationClip>(destination) == null)
                 {
@@ -267,7 +302,7 @@ namespace MultiplayerARPG.Demo.EditorTools
                     copy.name = clip.name;
                     AssetDatabase.CreateAsset(copy, destination);
                 }
-                clipMap[fileId.ToString()] = AssetDatabase.AssetPathToGUID(destination);
+                clipMap[libraryGuid + ":" + fileId] = AssetDatabase.AssetPathToGUID(destination);
             }
             AssetDatabase.SaveAssets();
         }
@@ -357,10 +392,12 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// copy, and from a library clip to its extracted `.anim`. Returns how many files
         /// changed.
         /// </summary>
-        private static int Rewrite(Dictionary<string, string> guidMap, string library, Dictionary<string, string> clipMap)
+        private static int Rewrite(Dictionary<string, string> guidMap, List<string> libraries, Dictionary<string, string> clipMap)
         {
-            string libraryGuid = AssetDatabase.AssetPathToGUID(library);
-            var clipPattern = new Regex(@"\{fileID: (-?\d+), guid: " + libraryGuid + @", type: 3\}");
+            var libraryGuids = new List<string>();
+            foreach (string library in libraries)
+                libraryGuids.Add(AssetDatabase.AssetPathToGUID(library));
+            var clipPattern = new Regex(@"\{fileID: (-?\d+), guid: (" + string.Join("|", libraryGuids.ToArray()) + @"), type: 3\}");
             var guidPattern = new Regex(@"guid: ([0-9a-f]{32})");
             int changed = 0;
             foreach (string path in TextAssets())
@@ -374,7 +411,7 @@ namespace MultiplayerARPG.Demo.EditorTools
                     updated = clipPattern.Replace(updated, match =>
                     {
                         string replacement;
-                        return clipMap.TryGetValue(match.Groups[1].Value, out replacement)
+                        return clipMap.TryGetValue(match.Groups[2].Value + ":" + match.Groups[1].Value, out replacement)
                             ? "{fileID: 7400000, guid: " + replacement + ", type: 2}"
                             : match.Value;
                     });
@@ -401,9 +438,11 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// changed. Needed for the map scene, which is binary (see the class notes), and
         /// harmless for the text ones, which the rewrite has already covered.
         /// </summary>
-        private static int RemapScenes(Dictionary<string, string> guidMap, string library, Dictionary<string, string> clipMap)
+        private static int RemapScenes(Dictionary<string, string> guidMap, List<string> libraries, Dictionary<string, string> clipMap)
         {
-            string libraryGuid = AssetDatabase.AssetPathToGUID(library);
+            var libraryGuids = new HashSet<string>();
+            foreach (string library in libraries)
+                libraryGuids.Add(AssetDatabase.AssetPathToGUID(library));
             var counterparts = new Dictionary<string, Dictionary<long, Object>>();
             var settings = new PrefabReplacingSettings
             {
@@ -458,7 +497,7 @@ namespace MultiplayerARPG.Demo.EditorTools
                         {
                             if (property.propertyType != SerializedPropertyType.ObjectReference || property.objectReferenceValue == null)
                                 continue;
-                            Object replacement = Counterpart(property.objectReferenceValue, guidMap, libraryGuid, clipMap, counterparts);
+                            Object replacement = Counterpart(property.objectReferenceValue, guidMap, libraryGuids, clipMap, counterparts);
                             if (replacement == null)
                                 continue;
                             property.objectReferenceValue = replacement;
@@ -484,7 +523,7 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// copied asset - which an FBX derives from the object's name, so it survives the
         /// copy. Null when the object is not a library one.
         /// </summary>
-        private static Object Counterpart(Object target, Dictionary<string, string> guidMap, string libraryGuid,
+        private static Object Counterpart(Object target, Dictionary<string, string> guidMap, HashSet<string> libraryGuids,
                                           Dictionary<string, string> clipMap, Dictionary<string, Dictionary<long, Object>> cache)
         {
             string guid;
@@ -492,7 +531,7 @@ namespace MultiplayerARPG.Demo.EditorTools
             if (!AssetDatabase.TryGetGUIDAndLocalFileIdentifier(target, out guid, out fileId))
                 return null;
             string clipGuid;
-            if (guid == libraryGuid && clipMap.TryGetValue(fileId.ToString(), out clipGuid))
+            if (libraryGuids.Contains(guid) && clipMap.TryGetValue(guid + ":" + fileId, out clipGuid))
                 return AssetDatabase.LoadAssetAtPath<AnimationClip>(AssetDatabase.GUIDToAssetPath(clipGuid));
             string copyGuid;
             if (!guidMap.TryGetValue(guid, out copyGuid))
@@ -521,6 +560,15 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// <summary>Whether a file is YAML rather than one Unity wrote in binary.</summary>
         private static bool IsText(string path)
         {
+            // A .meta is always text, but it opens with `fileFormatVersion`, not the
+            // `%YAML` header the test below looks for - so until 2026-09-23 every .meta was
+            // turned away here despite being on TextAssetExtensions, and an FBX's material
+            // remaps (`externalObjects`) were never rewritten. It went unnoticed while the
+            // copied models happened to remap to nothing; `Pebble_Square_3.fbx` and
+            // `Prop_Wagon.fbx` were the first that pointed at library materials, and two
+            // collector runs in a row left them there.
+            if (path.EndsWith(".meta", System.StringComparison.OrdinalIgnoreCase))
+                return true;
             using (var stream = System.IO.File.OpenRead(path))
             {
                 int first = stream.ReadByte();
@@ -631,8 +679,15 @@ namespace MultiplayerARPG.Demo.EditorTools
                 Debug.LogError($"[{nameof(DemoArtCollector)}] \"{active.path}\" has unsaved changes; save or discard them first.");
                 return null;
             }
+            // Read before the scene is replaced. `Scene` is a handle, and once NewScene has
+            // unloaded the scene it names, `path` on it comes back empty - which Collect
+            // takes as "leave, silently". Until 2026-09-23 that is exactly what happened
+            // whenever a demo scene was open: the collector unloaded it, then stopped with
+            // nothing extracted, nothing rewritten and nothing logged. Every run that worked
+            // had happened to start from an empty scene.
+            string path = active.path;
             EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
-            return active.path;
+            return path;
         }
 
         private static void EnsureFolder(string path)

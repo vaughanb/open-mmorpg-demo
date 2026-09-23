@@ -1,4 +1,5 @@
 ﻿using MultiplayerARPG.GameData.Model.Playables;
+using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
 
@@ -22,9 +23,32 @@ namespace MultiplayerARPG.Demo.EditorTools
         public const string LibraryPath = "Assets/Plugins/Quaternius/Animations/UAL1_Fixed.fbx";
 
         /// <summary>
-        /// Every animation the demo owns, in one folder: the clips extracted from the
-        /// Quaternius library, the Mixamo downloads, and the bow shot generated here.
-        /// Anything the library does not cover can simply be dropped in.
+        /// Quaternius's Universal Animation Library 2 (CC0, 2026): 134 clips on the same
+        /// universal rig as UAL1, so they drive the demo's bodies with no retargeting. Added
+        /// on 2026-09-23 to replace the six Mixamo skill clips, which could not ship - Adobe
+        /// allows Mixamo in a finished game but not as raw files in an engine template.
+        ///
+        /// **Imported with UAL1's exact clip settings**: humanoid, own avatar, every clip
+        /// turned 180 degrees with its original orientation and height kept, looping only
+        /// where the name ends `_Loop`. Measured before choosing that: a UAL2 idle and a
+        /// UAL1 idle sampled raw on the same body face the same way to two decimals, so it
+        /// needs UAL1's turn, not a new one. The in-place export (`UAL2.fbx`), not
+        /// `UAL2_RM.fbx` - the kit moves characters itself and every clip here is in place.
+        /// </summary>
+        public const string SecondLibraryPath = "Assets/Plugins/Quaternius/Animations/UAL2/UAL2.fbx";
+
+        /// <summary>
+        /// Every source library, in priority order. The two share exactly one clip name,
+        /// `A_TPose`, and it resolves to UAL1; nothing the demo plays is affected.
+        /// </summary>
+        public static readonly string[] LibraryPaths = { LibraryPath, SecondLibraryPath };
+
+        /// <summary>
+        /// Every animation the demo owns, in one folder: the clips extracted from the two
+        /// Quaternius libraries and the bow shot generated here. Anything the libraries do
+        /// not cover can be dropped in - **if it is CC0**, because this folder ships inside
+        /// the kit. Mixamo clips lived here until 2026-09-23 and had to come out; see
+        /// <see cref="SecondLibraryPath"/>.
         ///
         /// This used to be two places - extracted clips under `Demo/Art/Animations` with
         /// the demo's own beside them in `Demo/Animations` - which meant neither folder
@@ -68,6 +92,93 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// future extraction inherits it, and on the already-extracted copy so the demo is
         /// right without waiting for a re-collect.
         /// </summary>
+        /// <summary>A library clip cut short, imported as a clip of its own.</summary>
+        private struct TrimmedClip
+        {
+            public string Name;
+            public string Source;
+            public float Seconds;
+        }
+
+        /// <summary>
+        /// Clips the demo plays shorter than they were authored.
+        ///
+        /// **Trimmed, not sped up, because a skill's clip speed is applied twice.** The
+        /// kit's use-skill component passes the clip's `animSpeedRate` on to
+        /// `PlayActionAnimation` as the play-speed multiplier, and the playable then
+        /// multiplies it by the same `animSpeedRate` again - so a clip set to 2x plays at
+        /// 4x while the skill's own timing runs at 2x. Measured on 2026-09-23: Rallying
+        /// Cry at 2x showed its arms up for 0.15s of a 2s action and stood idle for the
+        /// rest; at 1x the same clip played exactly as authored. A shorter clip at 1x has
+        /// no such trap.
+        /// </summary>
+        private static readonly TrimmedClip[] Trimmed =
+        {
+            // UAL1's `Celebration` is 4s: arms up from 0.3s to 1.6s, then 2.4s lowering them.
+            // The shout needs the first part; 2.2s keeps the whole gesture and the start of
+            // the lowering, and the blend back to idle does the rest.
+            new TrimmedClip { Name = "Celebration_Rally", Source = "Celebration", Seconds = 2.2f },
+        };
+
+        /// <summary>
+        /// Adds each trimmed clip to its library's import as an extra clip on the same take,
+        /// copying the source clip's settings, so it resolves by name like any other and the
+        /// art collector extracts it into the demo. Reimports only when something changed -
+        /// UAL1 is a 64MB file.
+        /// </summary>
+        public static void EnsureTrimmedClips()
+        {
+            foreach (string library in LibraryPaths)
+            {
+                var importer = AssetImporter.GetAtPath(library) as ModelImporter;
+                if (importer == null)
+                    continue;
+                var clips = new List<ModelImporterClipAnimation>(importer.clipAnimations);
+                if (clips.Count == 0)
+                    clips.AddRange(importer.defaultClipAnimations);
+                bool changed = false;
+                foreach (TrimmedClip trim in Trimmed)
+                {
+                    ModelImporterClipAnimation source = clips.Find(c => c.name == trim.Source);
+                    if (source == null)
+                        continue;
+                    float lastFrame = source.firstFrame + trim.Seconds * 30f;
+                    ModelImporterClipAnimation existing = clips.Find(c => c.name == trim.Name);
+                    if (existing != null && Mathf.Approximately(existing.lastFrame, lastFrame))
+                        continue;
+                    if (existing != null)
+                        clips.Remove(existing);
+                    var copy = new ModelImporterClipAnimation
+                    {
+                        name = trim.Name,
+                        takeName = source.takeName,
+                        firstFrame = source.firstFrame,
+                        lastFrame = lastFrame,
+                        rotationOffset = source.rotationOffset,
+                        keepOriginalOrientation = source.keepOriginalOrientation,
+                        keepOriginalPositionY = source.keepOriginalPositionY,
+                        keepOriginalPositionXZ = source.keepOriginalPositionXZ,
+                        lockRootRotation = source.lockRootRotation,
+                        lockRootHeightY = source.lockRootHeightY,
+                        lockRootPositionXZ = source.lockRootPositionXZ,
+                        heightFromFeet = source.heightFromFeet,
+                        loopTime = false,
+                        loopPose = source.loopPose,
+                        maskType = source.maskType,
+                    };
+                    clips.Add(copy);
+                    changed = true;
+                    Debug.Log($"[{nameof(DemoAnimationSet)}] Added \"{trim.Name}\" ({trim.Seconds}s of \"{trim.Source}\") to {library}.");
+                }
+                if (!changed)
+                    continue;
+                importer.clipAnimations = clips.ToArray();
+                EditorUtility.SetDirty(importer);
+                importer.SaveAndReimport();
+                _clips = null;
+            }
+        }
+
         public static void EnsureLooping()
         {
             foreach (string name in MustLoop)
@@ -138,8 +249,19 @@ namespace MultiplayerARPG.Demo.EditorTools
                     foreach (string guid in AssetDatabase.FindAssets("t:Model", new[] { ExtraAnimationDir }))
                         CollectClips(AssetDatabase.GUIDToAssetPath(guid), found);
                 }
-                if (AssetDatabase.LoadAssetAtPath<Object>(LibraryPath) != null)
-                    CollectClips(LibraryPath, found);
+                foreach (string library in LibraryPaths)
+                {
+                    if (AssetDatabase.LoadAssetAtPath<Object>(library) != null)
+                        CollectClips(library, found);
+                }
+                // Last, and only for local use: clips made by DemoMixamoImport. Nothing the
+                // demo ships names one, and if a local edit does, Verify reports the demo as
+                // reaching outside itself - which is the point.
+                if (AssetDatabase.IsValidFolder(DemoMixamoImport.ClipDir))
+                {
+                    foreach (string guid in AssetDatabase.FindAssets("t:AnimationClip", new[] { DemoMixamoImport.ClipDir }))
+                        CollectClips(AssetDatabase.GUIDToAssetPath(guid), found);
+                }
 
                 _clips = found.ToArray();
             }
@@ -149,7 +271,7 @@ namespace MultiplayerARPG.Demo.EditorTools
                 if (clip.name == name)
                     return clip;
             }
-            Debug.LogError($"[{nameof(DemoAnimationSet)}] No clip named \"{name}\" in {LibraryPath} " +
+            Debug.LogError($"[{nameof(DemoAnimationSet)}] No clip named \"{name}\" in {string.Join(", ", LibraryPaths)} " +
                            $"or {ExtraAnimationDir}.");
             return null;
         }

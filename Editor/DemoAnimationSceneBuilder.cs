@@ -278,20 +278,23 @@ namespace MultiplayerARPG.Demo.EditorTools
                     ordered.Add(clip);
             }
 
-            if (AssetDatabase.LoadAssetAtPath<Object>(DemoAnimationSet.LibraryPath) != null)
+            // Both libraries, UAL1 first, so a clip from either can be tried on the bench
+            // before a skill is pointed at it.
+            foreach (string library in DemoAnimationSet.LibraryPaths)
             {
-                foreach (Object asset in AssetDatabase.LoadAllAssetsAtPath(DemoAnimationSet.LibraryPath))
+                if (AssetDatabase.LoadAssetAtPath<Object>(library) == null)
+                {
+                    Debug.LogWarning($"[{nameof(DemoAnimationSceneBuilder)}] {library} is not in this " +
+                                     "project, so its clips are not on the bench.");
+                    continue;
+                }
+                foreach (Object asset in AssetDatabase.LoadAllAssetsAtPath(library))
                 {
                     var clip = asset as AnimationClip;
                     if (clip == null || clip.name.StartsWith("__") || !seen.Add(clip))
                         continue;
                     ordered.Add(clip);
                 }
-            }
-            else
-            {
-                Debug.LogWarning($"[{nameof(DemoAnimationSceneBuilder)}] {DemoAnimationSet.LibraryPath} is not in " +
-                                 "this project, so only the demo's own clips are on the bench.");
             }
 
             return ordered;

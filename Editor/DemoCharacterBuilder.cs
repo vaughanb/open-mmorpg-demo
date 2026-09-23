@@ -176,6 +176,52 @@ namespace MultiplayerARPG.Demo.EditorTools
                 Parts = new[] { "Body", "Legs", "Feet" }, Bare = new[] { "Arms" } },
         };
 
+        /// <summary>
+        /// Re-applies the per-skill clips to every character model, and touches nothing else.
+        ///
+        /// A skill's clip, trigger and speed live in `DemoSkillBuilder`'s specs, but they
+        /// reach the game on the *models* - `skillAnimations` on each - and the only other
+        /// way to rewrite that field is `Build Character Models`, which regenerates every
+        /// model and so has to be followed by the whole entity chain (entities, skin tones,
+        /// size, mounts, the database) to come back to where it was. For a change that is
+        /// only "which clip, which frame", that is a lot of rebuilding to put one array back.
+        ///
+        /// What this writes is exactly what `Build Character Models` would write for that
+        /// field, from the same `DemoAnimationSet.BuildSkillAnimations`, so the two cannot
+        /// disagree. It only visits models that already carry skill animations - the
+        /// humanoids this builder makes - so the animals, which have their own sets, are
+        /// left alone.
+        /// </summary>
+        [MenuItem("Open MMORPG/Demo/Refresh Skill Animations")]
+        public static void RefreshSkillAnimations()
+        {
+            DemoAnimationSet.EnsureTrimmedClips();
+            SkillAnimations[] skills = DemoAnimationSet.BuildSkillAnimations();
+            int refreshed = 0;
+            foreach (string guid in AssetDatabase.FindAssets("t:Prefab", new[] { ModelOutDir }))
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guid);
+                var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
+                var existing = prefab != null ? prefab.GetComponent<PlayableCharacterModel>() : null;
+                if (existing == null || existing.skillAnimations == null || existing.skillAnimations.Length == 0)
+                    continue;
+                GameObject root = PrefabUtility.LoadPrefabContents(path);
+                try
+                {
+                    root.GetComponent<PlayableCharacterModel>().skillAnimations = skills;
+                    PrefabUtility.SaveAsPrefabAsset(root, path);
+                    ++refreshed;
+                }
+                finally
+                {
+                    PrefabUtility.UnloadPrefabContents(root);
+                }
+            }
+            AssetDatabase.SaveAssets();
+            Debug.Log($"[{nameof(DemoCharacterBuilder)}] Refreshed the skill animations on {refreshed} character model(s). " +
+                      "Run Collect Demo Art after, so any newly used library clip is extracted into the demo.");
+        }
+
         [MenuItem("Open MMORPG/Demo/Build Character Models")]
         public static void BuildAll()
         {
@@ -183,6 +229,7 @@ namespace MultiplayerARPG.Demo.EditorTools
             // Before the models are built, so they are wired to clips that already carry
             // the right loop flag - see DemoAnimationSet.MustLoop for the one that does not.
             DemoAnimationSet.EnsureLooping();
+            DemoAnimationSet.EnsureTrimmedClips();
             ShowBothSidesOfCloth();
             foreach (Variant variant in Variants)
                 Build(variant);

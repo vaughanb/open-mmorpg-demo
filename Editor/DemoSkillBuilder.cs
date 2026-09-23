@@ -152,7 +152,15 @@ namespace MultiplayerARPG.Demo.EditorTools
             /// </summary>
             public string Clip;
             public float Trigger;
-            /// <summary>Played faster than authored where the library's clip is longer than the skill wants. Zero is as authored.</summary>
+            /// <summary>
+            /// Play speed for the clip. Zero is as authored. **Leave it at zero.** The kit
+            /// applies a skill clip's speed twice - the use-skill component passes it to
+            /// `PlayActionAnimation` as the multiplier and the playable multiplies it by the
+            /// same value again - so 2 plays the clip at 4x while the skill's own timing runs
+            /// at 2x, and the character stands idle for the difference. To make a clip
+            /// shorter, trim it instead: see `DemoAnimationSet.Trimmed`. No skill uses this
+            /// since 2026-09-23.
+            /// </summary>
             public float ClipSpeed;
             /// <summary>The clip looped while casting. Only read when <see cref="Cast"/> is above zero.</summary>
             public string CastClip;
@@ -221,14 +229,17 @@ namespace MultiplayerARPG.Demo.EditorTools
                 // A wider arc than the sword's own 90 degrees, and half a metre further:
                 // this is the skill that hits the second bandit, and it has to reach him.
                 Distance = 2.9f, Fov = 170f,
-                // A Mixamo sword-and-shield swing rather than the library's second stock
-                // one: it spins through almost a full turn, which is what a 170-degree arc
-                // ought to look like and what the library had nothing for.
+                // UAL2's third heavy swing - the flattest wide cut in the library, which is
+                // what a 170-degree arc ought to look like: the sword hand sweeps 317
+                // degrees round the body with only 0.29m of rise. (This was a Mixamo clip
+                // until 2026-09-23; Mixamo cannot ship in a template - see DemoAnimationSet.)
                 //
-                // Trigger measured, not judged: the sword hand peaks at 8.3 m/s and reaches
-                // furthest ahead of the chest on the SAME frame, 47% in. Two independent
-                // readings agreeing is what makes it the frame the blow lands.
-                Clip = "Cleave", Trigger = 0.47f, Audio = DemoAudioWiring.SwordSwing,
+                // Trigger measured in the body's own frame, so the stance turn does not
+                // count as swing. The two readings disagree here, unlike the Mixamo clip's:
+                // the arm drives forward in the first third, reaches furthest ahead at 0.65,
+                // and then the blade sweeps sideways across the front, fastest at 0.78. The
+                // blow lands in that crossing, so 0.7 - between the two.
+                Clip = "Sword_Heavy_C", Trigger = 0.7f, Audio = DemoAudioWiring.SwordSwing,
                 Glyph = Glyph.Slash },
 
             new SkillSpec { Name = "ShieldBash", Title = "Shield Bash", Class = Warrior, LearnLevel = 3,
@@ -238,16 +249,16 @@ namespace MultiplayerARPG.Demo.EditorTools
                 WeaponRate = 0.6f, WeaponRatePerLevel = 0.1f,
                 Distance = 2.2f, Fov = 60f,
                 BuffSeconds = 1.5f, Stun = true, Knockback = 6f,
-                // Mixamo ships it as a block and it serves as a bash: a braced shield
-                // driven forward reads either way, and it beats the library's two-handed
-                // shove, which was standing in for a shield it did not know about.
+                // UAL2's one-shot shield strike, which is a bash by design: measured on the
+                // shield hand it thrusts 0.46m at 9.3 m/s, against 0.42m at 10.3 for the
+                // Mixamo block it replaces (2026-09-23). Near enough the same move.
                 //
-                // Trigger is a judgement rather than a measurement, because this clip has
-                // no blow in it to measure - the shield hand peaks early at 37% and then
-                // keeps extending to the last frame. 0.6 is where it is out and still
-                // moving; triggering at the true furthest reach would land the stun on the
-                // final frame.
-                Clip = "Shield_Bash", Trigger = 0.6f, Audio = DemoAudioWiring.ShieldBash,
+                // Trigger measured on the shield hand's FORWARD speed, not its total speed
+                // or its reach, because both of those mislead here: the shield drives
+                // forward in the first fifth of the clip (7.1 then 4.2 m/s) and then simply
+                // holds, creeping to its furthest point at 0.69 long after the blow. It has
+                // arrived by 0.18, so that is where the stun lands.
+                Clip = "Shield_OneShot", Trigger = 0.18f, Audio = DemoAudioWiring.ShieldBash,
                 Glyph = Glyph.Shield },
 
             new SkillSpec { Name = "Charge", Title = "Charge", Class = Warrior, LearnLevel = 5,
@@ -258,20 +269,21 @@ namespace MultiplayerARPG.Demo.EditorTools
                 // The warrior's answer to an archer. Twelve metres is a little under the
                 // bandits' 14-metre sight, so a charge begun on sight arrives.
                 Distance = 12f,
-                // A Mixamo sprint cycle, replacing the library's `Roll` - which was a
-                // dodge doing duty as a charge, and read as a tumble rather than a run.
+                // UAL2's shield-forward sprint - a warrior running in behind his shield,
+                // which is what a charge is. It replaced a Mixamo sprint on 2026-09-23, which
+                // itself replaced UAL1's `Roll`, a dodge that read as a tumble.
                 //
                 // It loops, and it has to: the trigger is what STARTS the dash
                 // (`SimpleDashAttackSkill.ApplySkillImplement` applies the force there),
                 // and the force then runs on its own timing - `CalculateDuration` solves
                 // for the distance to the target, so closing the full twelve metres takes
-                // about a second against this clip's 0.53. A one-shot would finish with
+                // about a second against this clip's 0.67. A one-shot would finish with
                 // the character still travelling.
                 //
                 // Triggered early, at 0.15, so the launch is within a few frames of the
                 // run starting. `Roll`'s 0.35 on a 1.47s clip meant half a second of
                 // winding up before anything moved, which is not what a charge is.
-                Clip = "Charge", Trigger = 0.15f, Audio = DemoAudioWiring.PunchSwing,
+                Clip = "Sprint_Shield_Loop", Trigger = 0.15f, Audio = DemoAudioWiring.PunchSwing,
                 Glyph = Glyph.Chevrons },
 
             new SkillSpec { Name = "RallyingCry", Title = "Rallying Cry", Class = Warrior, LearnLevel = 8,
@@ -280,16 +292,23 @@ namespace MultiplayerARPG.Demo.EditorTools
                 Mp = 18, MpPerLevel = 4, Cooldown = 45f, CooldownPerLevel = 1.5f,
                 BuffTo = BuffTo.NearbyAllies, BuffDistance = 14f, BuffSeconds = 20f,
                 BuffDamage = 4, BuffDamagePerLevel = 2, BuffMoveRate = 0.1f,
-                // A Mixamo sword-and-shield flourish, replacing the library's
-                // `Celebration` - which was a man cheering, pressed into service as a war
-                // cry because nothing better existed.
+                // UAL1's `Celebration` - both arms thrown up over the head - which reads as
+                // a war cry once there is a shout under it. It was replaced by a Mixamo
+                // flourish for a week and came back on 2026-09-23, when the Mixamo clips
+                // had to come out; UAL2 has nothing closer.
                 //
-                // The whole gesture is over in the first quarter: the arm peaks at 5.1 m/s
-                // 23% in and the rest is settling. So the buff lands at 0.25, and the clip
-                // runs 40% fast to cut the dead tail - the character is rooted for its
-                // full length whatever happens in it, and 2.4s of that on a shout is a
-                // long time to stand still.
-                Clip = "Rallying_Cry", Trigger = 0.25f, ClipSpeed = 1.4f, Audio = DemoAudioWiring.Shout,
+                // Measured by hand height against the head, because the gesture is upward,
+                // not forward: the arms clear the head at 0.3s, stay up until about 1.6s,
+                // and spend the remaining 2.4s of the 4s clip coming down. The character is
+                // rooted for the clip's whole length, and four seconds of standing still for
+                // a shout is far too long - so it plays `Celebration_Rally`, the first 2.2s
+                // cut as a clip of its own (see DemoAnimationSet.Trimmed), at normal speed.
+                // The buff lands at 0.14, as the arms clear the head.
+                //
+                // Not sped up with ClipSpeed, which was the first attempt: the kit applies a
+                // skill clip's speed twice, so 2x played at 4x and the arms were up for a
+                // sixth of a second. Measured live, then trimmed instead.
+                Clip = "Celebration_Rally", Trigger = 0.14f, Audio = DemoAudioWiring.Shout,
                 Glyph = Glyph.Banner },
 
             // ---- Ranger: everything is a shot, and the good ones are worth standing still for ----
@@ -384,16 +403,21 @@ namespace MultiplayerARPG.Demo.EditorTools
                 Min = 26f, Max = 34f, PerLevel = 10f,
                 Distance = 18f, Radius = 5f,
                 BuffSeconds = 1.2f,
-                // A Mixamo two-handed pair, replacing the library's - arms raised through
-                // the cast, then thrown forward on the launch. It is the difference
-                // between the bolt the mage throws every three seconds and the thing worth
-                // standing still for a second and a half to call down.
+                // UAL1's two-handed spell pair: the staff held out in both hands through the
+                // cast, then pushed forward on the launch - the same pair the Hierophant summons with,
+                // which is at least a family resemblance. The one-handed `Spell_Simple` set
+                // is the mage's everyday bolt, so the two-handed one is what marks this as
+                // the thing worth standing still for. A Mixamo pair stood in for a week and
+                // came out on 2026-09-23; neither Quaternius library has a better cast.
                 //
-                // The cast clip is 2.17s against a 1.4s cast, so it never runs out and
-                // never has to loop. The launch is 2.7s as authored, which is longer than
-                // the cast that precedes it, so it runs 60% fast; the trigger is where the
-                // hands are thrown furthest forward, half way.
-                Clip = "Spell_2H_Attack", Trigger = 0.5f, ClipSpeed = 1.6f, CastClip = "Spell_2H_Cast",
+                // The cast clip loops, so it covers the 1.4s cast whatever its length. The
+                // launch is short (0.27s) and fires where the hands reach furthest forward,
+                // measured at 0.52 of it. **That makes the finish a quick push, not a throw**:
+                // measured live against the Mixamo pair it replaced, the cast is identical and
+                // the whole skill ends 1.4s sooner, entirely because the Mixamo launch was a
+                // 1.7s two-handed throw. A longer launch is the thing to look for if this
+                // reads too slight for the island's biggest spell.
+                Clip = "Spell_Double_Shoot_Loop", Trigger = 0.5f, CastClip = "Spell_Double_Idle_Loop",
                 Audio = DemoAudioWiring.SkillImpact, Glyph = Glyph.Meteor,
                 CastEffect = "FX_MeteorCast", ActivateEffect = "FX_MeteorLaunch",
                 AreaColour = DemoSkillEffectBuilder.Ember, HitEffect = "FX_HitEmber" },

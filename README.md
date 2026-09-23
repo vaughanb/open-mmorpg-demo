@@ -108,9 +108,10 @@ Each step consumes the previous one's output, so run them in this order:
    **Both read two hand-authored template prefabs that no step produces:**
    `Demo/Prefabs/GamePlay/CharacterEntities/BaseCharacter.prefab` and `BaseEnemy.prefab`.
    They are the tuned entity minus its model, and everything player- or enemy-shaped is
-   cloned from them. If one is missing the step logs `Missing "...BaseEnemy.prefab" or
-   "...Model.prefab"` and silently builds nothing - so check they are there before
-   blaming the model it names second. `BaseEnemy.prefab` was rebuilt on 2026-09-16 by
+   cloned from them. Nothing references them at runtime, so a cleanup sweep can delete one
+   unnoticed - `BaseCharacter.prefab` was, until 2026-09-23. The step then says `No template
+   at ...` and names the `git checkout` that restores it from the kit repo. No other step
+   may write to them: the skin-tone and size sweeps skip `DemoEntityBuilder.IsTemplate`. `BaseEnemy.prefab` was rebuilt on 2026-09-16 by
    taking `DemoBanditMale`, deleting its `Model` child and stripping the three sound
    components the audio wiring adds per entity; rebuilding the deer from it reproduced
    the existing deer transform-for-transform, which is how it was checked.
@@ -225,12 +226,29 @@ Each step consumes the previous one's output, so run them in this order:
 Audits that measure the result and report every fault: `Audit House Interiors`,
 `Audit Scene Placement`, `Audit Outfits`.
 
-`Open MMORPG > Demo > Import Mixamo Animations` is not part of the sequence — it is run
-once when a download is added. Drop the FBX in `Assets/Animations/Mixamo` (outside the kit:
-they are ~31MB each because Mixamo includes the skinned mesh), add it to the table in
+**The demo's animation is CC0 only.** Its clips come from Quaternius's two Universal
+Animation Libraries, both CC0, which sit outside the kit in `Assets/Plugins/Quaternius/Animations`
+(UAL1 and `UAL2/`); `Collect Demo Art` extracts just the clips the demo plays into
+`Demo/Animations`. Anything dropped into that folder by hand ships with the kit, so it must
+be CC0 too.
+
+`Open MMORPG > Demo > Refresh Skill Animations` re-applies each skill's clip, trigger and
+speed from `DemoSkillBuilder` to the character models, and touches nothing else. Use it
+after tuning a skill's animation instead of `Build Character Models`, which would need the
+whole entity chain run again after it. Then `Collect Demo Art`, for any newly used clip.
+
+`Open MMORPG > Demo > Import Mixamo Animations` is **for local use only**. Mixamo lets its
+animations ship inside a finished game but not as raw files in an engine template, which is
+what this demo is - so its output goes to `Assets/Animations/Mixamo/Edited`, outside the kit,
+and nothing the demo ships names a Mixamo clip. Six did until 2026-09-23; they were replaced
+from UAL2 and UAL1 and the hand-edited originals moved to that folder. To try one locally,
+point a skill's `Clip` in `DemoSkillBuilder` at it: it resolves, and `Verify Demo Is
+Self-Contained` will then report the demo as reaching outside itself, which is the reminder
+not to ship it. Drop the FBX in `Assets/Animations/Mixamo`
+(they are ~31MB each because Mixamo includes the skinned mesh), add it to the table in
 `DemoMixamoImport`, and it sets the rig, throws away the 43 library takes Mixamo hands back
 with every download, applies the orientation offset and extracts one `.anim` into
-`Demo/Animations`. `Discard Staged Mixamo FBXs` then deletes the sources. The tool's table
+`Assets/Animations/Mixamo/Edited`. `Discard Staged Mixamo FBXs` then deletes the sources. The tool's table
 is the record of which clip came from which download, so **rename clips there rather than in
 the Project window** — a rename in the editor leaves the table pointing at the old name, and
 the next run writes that name back as a second asset.

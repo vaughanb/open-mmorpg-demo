@@ -8,7 +8,16 @@ namespace MultiplayerARPG.Demo.EditorTools
 {
     /// <summary>
     /// Brings a Mixamo download onto the demo's characters and leaves behind a single
-    /// `.anim` the demo can ship.
+    /// `.anim` - **for local use only; it cannot ship.**
+    ///
+    /// Adobe lets a Mixamo animation go out inside a finished game, but not as a raw file
+    /// in an engine template or an asset-store package, and the demo is both. The six
+    /// clips this made in September sat in `Demo/Animations` until 2026-09-23 and had to
+    /// come out; the skills now play CC0 clips from the two Quaternius libraries. Output
+    /// goes to <see cref="ClipDir"/>, outside the kit, and `DemoAnimationSet.Clip` looks
+    /// there last - so pointing a skill at a Mixamo clip in your own copy works, and
+    /// `Verify Demo Is Self-Contained` then reports it as an outside dependency, which is
+    /// the guard that keeps it from being shipped by accident.
     ///
     /// Three things have to happen to a Mixamo file for this rig, and each of them fails
     /// silently if it does not:
@@ -42,8 +51,13 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// </summary>
         public const string StagingDir = "Assets/Animations/Mixamo";
 
-        /// <summary>Where the extracted clip lands - the folder `DemoAnimationSet` scans after the library.</summary>
-        private const string ClipDir = "Assets/OpenMMORPG/Demo/Animations";
+        /// <summary>
+        /// Where the extracted clip lands: **outside the kit**, beside the downloads. It was
+        /// `Demo/Animations` until 2026-09-23, which is how Mixamo data got into the folder
+        /// that ships. The hand-edited September clips were moved here with their ids
+        /// intact, and the import still never overwrites a clip that is already here.
+        /// </summary>
+        public const string ClipDir = "Assets/Animations/Mixamo/Edited";
 
         /// <summary>The take a Mixamo download names its own animation. The other 43 are ours, coming home.</summary>
         private const string MixamoTake = "mixamo.com";
