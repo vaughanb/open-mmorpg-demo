@@ -206,7 +206,12 @@ Each step consumes the previous one's output, so run them in this order:
     the minimap camera and the HUD's RawImage at `MinimapRenderTexture.asset`. After the
     island scene (step 10), and again after any rebuild of it, or the map stops matching the
     terrain. The sea is tinted from the heightmap afterwards: photographed alone it is a
-    transparent surface over a sand seabed, which reads as more beach.
+    transparent surface over a sand seabed, which reads as more beach. It also runs
+    `Build Minimap Quest Markers` (available on its own), which draws the NPC quest markers -
+    gold `!` on offer, silver `?` under way, gold `?` ready to hand in - into
+    `Demo/Textures/MinimapMarkers/` and puts them on `NpcMiniMapCanvas.prefab`. The template's
+    markers were `Text` glyphs that never rendered, so every state drew as the same plain
+    disc; a hand-in marker also pins to the minimap's edge when its NPC is out of frame.
 13d. `Open MMORPG > Demo > Build Menu Stage` - the home menu: a stone terrace of Quaternius
     pieces with the painted valley behind it, warm lighting, the `OPEN MMORPG` title, and a
     repaint of the menu panels. Rewrites the `MenuStage` root in `01Home.unity` and edits
@@ -247,8 +252,6 @@ be CC0 too.
 speed from `DemoSkillBuilder` to the character models, and touches nothing else. Use it
 after tuning a skill's animation instead of `Build Character Models`, which would need the
 whole entity chain run again after it. Then `Collect Demo Art`, for any newly used clip.
-
-`Open MMORPG > Demo > Import Mixamo Animations` is **for local use only**. Mixamo lets its
 `Open MMORPG > Demo > Refresh Weapon Attacks` is the same for the basic attack: it replaces
 only each melee and staff set's attack clips on the models (bows are skipped - their attack
 depends on whether that character can charge a shot).
@@ -260,6 +263,15 @@ attributes do not exist until it runs: it gives Arcane Bolt, Frost Nova and Mete
 point of Intelligence (`SpellPower`) and the staffs their Intelligence, plus a level of Arcane
 Bolt on the Elder Staff (`Foci`). So after `Build Items` or `Build Skills`, run `Build Combat Data`
 (elements live on the skills) and `Build Progression` again.
+
+Casting in melee needs two more things, both in place. **A hit only sometimes breaks a cast**:
+`Build Character Entities` swaps each player's and humanoid monster's skill component for
+`DemoUseSkillComponent`, which rolls `CastInterruptChance` (35%) per hit instead of the kit's
+certainty. And **Frost Nova is the mage's crowd control**: one burst that freezes everything
+within 4.5m for three seconds (the kit's Freeze ailment - no moving, attacking or casting), which
+is the window for a Meteor and a Bolt.
+
+`Open MMORPG > Demo > Import Mixamo Animations` is **for local use only**. Mixamo lets its
 animations ship inside a finished game but not as raw files in an engine template, which is
 what this demo is - so its output goes to `Assets/Animations/Mixamo/Edited`, outside the kit,
 and nothing the demo ships names a Mixamo clip. Six did until 2026-09-23; they were replaced

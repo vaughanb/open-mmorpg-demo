@@ -196,6 +196,12 @@ namespace MultiplayerARPG.Demo.EditorTools
             public float EvasionRate;
             public float DamagePerSecond;
             public bool Stun;
+            /// <summary>
+            /// The kit's Freeze ailment for <see cref="BuffSeconds"/>: no moving, attacking,
+            /// casting or using items, and the victim's animation stops where it is. Stun
+            /// disallows the same actions but keeps animating.
+            /// </summary>
+            public bool Freeze;
             public float Knockback;
 
             public BuffTo BuffTo;
@@ -379,20 +385,24 @@ namespace MultiplayerARPG.Demo.EditorTools
                 HitEffect = "FX_HitArcane" },
 
             new SkillSpec { Name = "FrostNova", Title = "Frost Nova", Class = Mage, LearnLevel = 3,
-                Description = "Cold off the floor in every direction, and nothing in it moves quickly again.",
+                Description = "Cold off the floor in every direction, and everything in it frozen where it stands.",
                 Shape = Shape.Area, Weapon = "Staff",
                 Mp = 16, MpPerLevel = 4, Cooldown = 15f, CooldownPerLevel = 0.6f,
                 // One burst since 2026-09-23 (`Burst`). It used to leave its patch down for
                 // as long as the slow and bite every 0.75s of it: 10-14 four or five times,
-                // about 60 a cast, which out-hit Meteor. Now it hits once, harder, and the
-                // slow still runs its full four seconds - between Arcane Bolt (one target,
-                // every 3s) and Meteor (the big one, every 25s).
+                // about 60 a cast, which out-hit Meteor. Now it hits once, harder - between
+                // Arcane Bolt (one target, every 3s) and Meteor (the big one, every 25s).
                 Min = 18f, Max = 24f, PerLevel = 5f,
                 Burst = true,
                 // Cast at the mage's own feet, which is the whole shape of the skill: it is
                 // what a mage does when something has already reached them.
                 Distance = 0f, Radius = 4.5f,
-                BuffSeconds = 4f, SlowRate = 0.5f,
+                // The mage's crowd control (2026-09-23): three seconds frozen - the kit's Freeze,
+                // so no moving, no attacking, no casting - where it was a 50% slow that kept
+                // biting. Enough to step clear and get a Meteor (1.4s) and a Bolt off unhit,
+                // which is the whole point now that the mage fights at arm's length. The Frost
+                // element's own chill still lands with the hit.
+                BuffSeconds = 3f, Freeze = true,
                 Clip = "Spell_Simple_Shoot", Trigger = 0.4f, Audio = DemoAudioWiring.SkillImpact,
                 Glyph = Glyph.Nova,
                 ActivateEffect = "FX_FrostNova", AreaColour = DemoSkillEffectBuilder.Frost,
@@ -811,19 +821,21 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// <summary>What an attacking skill leaves on whatever it hit.</summary>
         private static void WriteDebuff(SerializedObject serialized, SkillSpec spec)
         {
-            bool lingers = spec.SlowRate > 0f || spec.EvasionRate > 0f || spec.DamagePerSecond > 0f || spec.Stun;
+            bool lingers = spec.SlowRate > 0f || spec.EvasionRate > 0f || spec.DamagePerSecond > 0f || spec.Stun || spec.Freeze;
             serialized.FindProperty("isDebuff").boolValue = lingers;
             if (!lingers)
                 return;
 
             Set(serialized, "debuff.duration.baseAmount", spec.BuffSeconds);
             Set(serialized, "debuff.duration.amountIncreaseEachLevel", spec.BuffSeconds * 0.1f);
-            if (spec.Stun)
-                serialized.FindProperty("debuff.ailment").enumValueIndex = (int)AilmentPresets.Stun;
+            serialized.FindProperty("debuff.ailment").enumValueIndex = (int)(spec.Freeze ? AilmentPresets.Freeze
+                : spec.Stun ? AilmentPresets.Stun
+                : AilmentPresets.None);
+            // Written every time, so taking the slow off a skill actually takes it off.
+            Set(serialized, "debuff.increaseStatsRate.baseStats.moveSpeed", -spec.SlowRate);
             // Rates, not amounts: a flat number off a move speed would stop a slow bandit
-            // dead and barely trouble a deer, and the demo has both.
-            if (spec.SlowRate > 0f)
-                Set(serialized, "debuff.increaseStatsRate.baseStats.moveSpeed", -spec.SlowRate);
+            // dead and barely trouble a deer, and the demo has both. (The slow is written
+            // above, with the ailment.)
             if (spec.EvasionRate > 0f)
                 Set(serialized, "debuff.increaseStatsRate.baseStats.evasion", -spec.EvasionRate);
             if (spec.DamagePerSecond > 0f)

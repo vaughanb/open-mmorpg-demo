@@ -36,6 +36,7 @@ namespace MultiplayerARPG.Demo.EditorTools
         private const string ResourcesDir = GameDataDir + "/Resources";
         private const string DialogDir = ResourcesDir + "/NpcDialogs";
         private const string QuestDir = ResourcesDir + "/Quests";
+        private const string ConditionDir = ResourcesDir + "/NpcDialogConditions";
         private const string ItemDir = ResourcesDir + "/Items";
         private const string EntityDir = "Assets/OpenMMORPG/Demo/Prefabs/GamePlay/CharacterEntities";
 
@@ -160,6 +161,7 @@ namespace MultiplayerARPG.Demo.EditorTools
         {
             DemoItemBuilder.EnsureFolder(DialogDir);
             DemoItemBuilder.EnsureFolder(QuestDir);
+            DemoItemBuilder.EnsureFolder(ConditionDir);
 
             // Every quest asset first, in two passes: one of them gates on another having been
             // completed, and that gate is an asset reference, so they all have to exist before
@@ -180,7 +182,7 @@ namespace MultiplayerARPG.Demo.EditorTools
             NpcDialog banker = BuildBankerDialogs();
             NpcDialog smith = BuildSmithDialogs();
             NpcDialog merchant = BuildMerchantDialog();
-            NpcDialog innkeeper = BuildInnkeeperDialog(banditQuest, venisonQuest);
+            NpcDialog innkeeper = BuildInnkeeperDialog(banditQuest, venisonQuest, quests["MeatForThePot"]);
             NpcDialog elder = BuildQuestDialog(SpecOf("ThinTheCamp"), banditQuest);
             // The two guards now open with a quest of their own rather than a passing remark;
             // each offer line carries the flavour the old one-liner did.
@@ -233,6 +235,13 @@ namespace MultiplayerARPG.Demo.EditorTools
             /// right answer for a story beat - you only clear the camp once.
             /// </summary>
             public QuestRepeatType Repeat;
+            /// <summary>
+            /// The player's side of the conversation, for a quest that sits behind a menu on an
+            /// NPC who does other things too (see <see cref="QuestMenus"/>): asking for the work,
+            /// asking after it while it is under way, handing it in, and - for a repeatable
+            /// quest - asking for it again. Unused by a quest that is its NPC's whole dialog.
+            /// </summary>
+            public string AskLine, AboutLine, HandInLine, AgainLine;
         }
 
         /// <summary>
@@ -296,6 +305,10 @@ namespace MultiplayerARPG.Demo.EditorTools
                 // rather than `Daily` because a demo has to be showable twice in one sitting -
                 // the daily gate is a real calendar day, not a cooldown.
                 Repeat = QuestRepeatType.AnyTime,
+                AskLine = "Can I help in the kitchen?",
+                AboutLine = "About the venison...",
+                HandInLine = "I have your venison",
+                AgainLine = "Is the pot empty again?",
             },
             new QuestSpec
             {
@@ -310,6 +323,9 @@ namespace MultiplayerARPG.Demo.EditorTools
                 RequireLevel = 6, RequireQuest = "ThinTheCamp",
                 TaskType = QuestTaskType.KillMonster, TaskTarget = "Hierophant", TaskAmount = 1,
                 RewardItems = new[] { "MinorHealingPotion" }, RewardAmounts = new[] { 5 },
+                AskLine = "What are you watching for?",
+                AboutLine = "About the crypt...",
+                HandInLine = "The crypt is quiet now",
             },
         };
 
@@ -407,6 +423,58 @@ namespace MultiplayerARPG.Demo.EditorTools
             }
             Debug.LogError($"[{nameof(DemoNpcBuilder)}] No quest spec named \"{name}\".");
             return default;
+        }
+
+        /// <summary>
+        /// The menu lines that lead to a quest kept behind an NPC's greeting, one for each
+        /// state the quest can be in, so the line always says what picking it will do.
+        ///
+        /// Before this (2026-09-24) each such quest had one unconditioned line, and the kit's
+        /// quest dialog behind it changes its buttons by state - accept, abandon, complete - while
+        /// the line in front of it stayed put. Hilde's read "Is the pot empty again?", which
+        /// sounds like asking for work; a player back with four cuts of venison did not pick it,
+        /// and so never saw the Complete button. Now the line reads as a hand-in exactly when
+        /// the quest can be handed in.
+        ///
+        /// The four states do not overlap, so exactly one line shows (or none, for a finished
+        /// quest that does not repeat - the kit hides that line by itself). "Under way" needs the
+        /// demo's own condition; see <see cref="DemoQuestUnfinishedCondition"/> for why the
+        /// kit's `QuestOngoing` will not do. Every line goes to the same quest dialog.
+        ///
+        /// Put these first in the NPC's menu: the hand-in is the one a returning player wants.
+        /// </summary>
+        private static MenuSpec[] QuestMenus(QuestSpec spec, NpcDialog questDialog, Quest quest)
+        {
+            var unfinished = Create<DemoQuestUnfinishedCondition>($"{ConditionDir}/{spec.DialogPrefix}QuestUnfinished.asset");
+            if (unfinished.quest != quest)
+            {
+                unfinished.quest = quest;
+                EditorUtility.SetDirty(unfinished);
+            }
+
+            var menus = new List<MenuSpec>
+            {
+                new MenuSpec { Title = spec.HandInLine, Dialog = questDialog,
+                    IfQuest = quest, QuestState = NpcDialogConditionType.QuestTasksCompleted },
+                new MenuSpec { Title = spec.AskLine, Dialog = questDialog,
+                    IfQuest = quest, QuestState = NpcDialogConditionType.QuestNotStarted },
+                new MenuSpec { Title = spec.AboutLine, Dialog = questDialog, Custom = unfinished },
+            };
+            if (spec.Repeat != QuestRepeatType.None)
+            {
+                menus.Add(new MenuSpec { Title = spec.AgainLine, Dialog = questDialog,
+                    IfQuest = quest, QuestState = NpcDialogConditionType.QuestCompleted });
+            }
+            return menus.ToArray();
+        }
+
+        /// <summary>The quest lines first, then the NPC's own.</summary>
+        private static MenuSpec[] Concat(MenuSpec[] first, MenuSpec[] then)
+        {
+            var all = new MenuSpec[first.Length + then.Length];
+            first.CopyTo(all, 0);
+            then.CopyTo(all, first.Length);
+            return all;
         }
 
 
@@ -606,7 +674,7 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// The innkeeper. Her shop sells the alehouse's food and drink, which is every
         /// provision the item builder makes, so adding a dish there puts it on her board.
         /// </summary>
-        private static NpcDialog BuildInnkeeperDialog(Quest quest, NpcDialog venisonQuest)
+        private static NpcDialog BuildInnkeeperDialog(Quest quest, NpcDialog venisonQuest, Quest venison)
         {
             var board = Create<NpcDialog>($"{DialogDir}/InnkeeperBoard.asset");
             var boardSerialized = new SerializedObject(board);
@@ -663,13 +731,11 @@ namespace MultiplayerARPG.Demo.EditorTools
                 "Sit anywhere that is not the bench by the door, that one wobbles. You have the look of someone " +
                 "the elder wants a word with - but eat first. Hungry, or only thirsty?";
             serialized.FindProperty("type").enumValueIndex = (int)NpcDialogType.Normal;
-            SetMenus(serialized, new[]
+            // Her own errand first, one line per state of it (QuestMenus); none of them depends
+            // on Rowan's quest, so she offers it whatever his bandits are doing.
+            SetMenus(serialized, Concat(QuestMenus(SpecOf("MeatForThePot"), venisonQuest, venison), new[]
             {
                 new MenuSpec { Title = "What have you got?", Dialog = board },
-                // Her own errand. No quest condition on it: the kit hides a quest menu whose
-                // quest is finished by itself, and leaving it unconditioned means she offers it
-                // whatever Rowan's bandits are doing.
-                new MenuSpec { Title = "Is the pot empty again?", Dialog = venisonQuest },
                 new MenuSpec { Title = "What does the elder want?", Dialog = rumour,
                     IfQuest = quest, QuestState = NpcDialogConditionType.QuestNotStarted },
                 new MenuSpec { Title = "About those bandits...", Dialog = rumour,
@@ -677,7 +743,7 @@ namespace MultiplayerARPG.Demo.EditorTools
                 new MenuSpec { Title = "The headland is clear", Dialog = farewell,
                     IfQuest = quest, QuestState = NpcDialogConditionType.QuestCompleted },
                 new MenuSpec { Title = "Just passing through", Close = true },
-            });
+            }));
             serialized.ApplyModifiedPropertiesWithoutUndo();
             EditorUtility.SetDirty(greeting);
             return greeting;
@@ -742,13 +808,12 @@ namespace MultiplayerARPG.Demo.EditorTools
             serialized.FindProperty("description").stringValue =
                 "Mind the ladder. Best view on the island up here, and the worst thing to look at.";
             serialized.FindProperty("type").enumValueIndex = (int)NpcDialogType.Normal;
-            SetMenus(serialized, new[]
+            SetMenus(serialized, Concat(QuestMenus(SpecOf("WhatTheHillsHide"), questDialog, quest), new[]
             {
-                new MenuSpec { Title = "What are you watching for?", Dialog = questDialog },
                 new MenuSpec { Title = "Can you get me to that door?", Dialog = warp,
                     IfQuest = quest, QuestState = NpcDialogConditionType.QuestOngoing },
                 new MenuSpec { Title = "I will leave you to it", Close = true },
-            });
+            }));
             serialized.ApplyModifiedPropertiesWithoutUndo();
             EditorUtility.SetDirty(greeting);
             return greeting;
@@ -779,6 +844,8 @@ namespace MultiplayerARPG.Demo.EditorTools
             /// </summary>
             public Quest IfQuest;
             public NpcDialogConditionType QuestState;
+            /// <summary>A condition asset of the demo's own, for what the kit's cannot say.</summary>
+            public BaseCustomNpcDialogCondition Custom;
         }
 
         private static void SetMenus(SerializedObject serialized, MenuSpec[] specs)
@@ -792,14 +859,23 @@ namespace MultiplayerARPG.Demo.EditorTools
                 menu.FindPropertyRelative("isCloseMenu").boolValue = specs[i].Close;
                 menu.FindPropertyRelative("dialog").objectReferenceValue = specs[i].Dialog;
                 SerializedProperty conditions = menu.FindPropertyRelative("showConditions");
-                conditions.arraySize = specs[i].IfQuest == null ? 0 : 1;
+                conditions.arraySize = (specs[i].IfQuest == null ? 0 : 1) + (specs[i].Custom == null ? 0 : 1);
+                int next = 0;
                 if (specs[i].IfQuest != null)
                 {
-                    SerializedProperty condition = conditions.GetArrayElementAtIndex(0);
+                    SerializedProperty condition = conditions.GetArrayElementAtIndex(next++);
                     // intValue, not enumValueIndex: the enum has gaps (the custom kinds sit
                     // at 253 and 254), so index and value are not the same thing.
                     condition.FindPropertyRelative("conditionType").intValue = (int)specs[i].QuestState;
                     condition.FindPropertyRelative("quest").objectReferenceValue = specs[i].IfQuest;
+                    condition.FindPropertyRelative("customConditionScriptableObject").objectReferenceValue = null;
+                }
+                if (specs[i].Custom != null)
+                {
+                    SerializedProperty condition = conditions.GetArrayElementAtIndex(next++);
+                    condition.FindPropertyRelative("conditionType").intValue = (int)NpcDialogConditionType.CustomByScriptableObject;
+                    condition.FindPropertyRelative("quest").objectReferenceValue = null;
+                    condition.FindPropertyRelative("customConditionScriptableObject").objectReferenceValue = specs[i].Custom;
                 }
             }
         }

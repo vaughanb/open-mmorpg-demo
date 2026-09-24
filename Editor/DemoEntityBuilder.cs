@@ -282,6 +282,51 @@ namespace MultiplayerARPG.Demo.EditorTools
             { "IronLongsword", -48f },
         };
 
+        private const string UseSkillScriptPath = "Assets/OpenMMORPG/Demo/Scripts/DemoUseSkillComponent.cs";
+
+        /// <summary>
+        /// The chance a hit taken while casting breaks the cast. The kit's rule is certainty;
+        /// at about one in three, a Meteor (1.4s, roughly one bite long) mostly gets through a
+        /// wolf, and an Arcane Bolt (0.6s) nearly always. See
+        /// <see cref="MultiplayerARPG.Demo.DemoUseSkillComponent"/>.
+        /// </summary>
+        private const float CastInterruptChance = 0.35f;
+
+        /// <summary>
+        /// Swaps the entity's skill component for the demo's, which lets a hit only sometimes
+        /// break a cast.
+        ///
+        /// The script is swapped on the component the template already carries, rather than the
+        /// component being replaced: it keeps its file id and its place in the component list,
+        /// so the network behaviour order and anything pointing at it are unchanged. The kit
+        /// finds it by `GetOrAddComponent&lt;ICharacterUseSkillComponent, ...&gt;`, which a subclass
+        /// satisfies, so it never adds a second.
+        /// </summary>
+        private static void FocusCasting(GameObject entity)
+        {
+            var script = AssetDatabase.LoadAssetAtPath<MonoScript>(UseSkillScriptPath);
+            var component = entity.GetComponent<DefaultCharacterUseSkillComponent>();
+            if (script == null || component == null)
+            {
+                Debug.LogError($"[{nameof(DemoEntityBuilder)}] Could not give {entity.name} the demo's skill " +
+                               $"component: {(script == null ? UseSkillScriptPath + " is missing" : "it has no skill component")}.");
+                return;
+            }
+            if (!(component is MultiplayerARPG.Demo.DemoUseSkillComponent))
+            {
+                var serialized = new SerializedObject(component);
+                serialized.FindProperty("m_Script").objectReferenceValue = script;
+                serialized.ApplyModifiedPropertiesWithoutUndo();
+            }
+            var focus = entity.GetComponent<MultiplayerARPG.Demo.DemoUseSkillComponent>();
+            if (focus == null)
+            {
+                Debug.LogError($"[{nameof(DemoEntityBuilder)}] Swapping {entity.name}'s skill component script did not take.");
+                return;
+            }
+            focus.interruptChance = CastInterruptChance;
+        }
+
         /// <summary>The player skill that dashes, and the empty child its handler moves.</summary>
         private const string DashSkill = "Charge";
         private const string DashAnchorName = "DashHop";
@@ -578,6 +623,10 @@ namespace MultiplayerARPG.Demo.EditorTools
 
             if (monsterData == null)
                 AddChargeHandler(entity);
+
+            // Players and monsters alike, so a hit breaks the Hierophant's casts by the same
+            // odds as the mage's.
+            FocusCasting(entity);
 
             if (monsterData == null)
             {
