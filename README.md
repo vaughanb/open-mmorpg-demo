@@ -249,6 +249,17 @@ after tuning a skill's animation instead of `Build Character Models`, which woul
 whole entity chain run again after it. Then `Collect Demo Art`, for any newly used clip.
 
 `Open MMORPG > Demo > Import Mixamo Animations` is **for local use only**. Mixamo lets its
+`Open MMORPG > Demo > Refresh Weapon Attacks` is the same for the basic attack: it replaces
+only each melee and staff set's attack clips on the models (bows are skipped - their attack
+depends on whether that character can charge a shot).
+
+**The mage's staff is a melee weapon, and Intelligence is spell power** (2026-09-23). The staff
+swings (`Sword_Heavy_A`) instead of firing the Arcane Bolt missile as a free, uncooled basic
+attack; the spells carry the damage. `Build Progression` owns the attribute side, because the
+attributes do not exist until it runs: it gives Arcane Bolt, Frost Nova and Meteor damage per
+point of Intelligence (`SpellPower`) and the staffs their Intelligence, plus a level of Arcane
+Bolt on the Elder Staff (`Foci`). So after `Build Items` or `Build Skills`, run `Build Combat Data`
+(elements live on the skills) and `Build Progression` again.
 animations ship inside a finished game but not as raw files in an engine template, which is
 what this demo is - so its output goes to `Assets/Animations/Mixamo/Edited`, outside the kit,
 and nothing the demo ships names a Mixamo clip. Six did until 2026-09-23; they were replaced

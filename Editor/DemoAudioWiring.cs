@@ -795,8 +795,8 @@ namespace MultiplayerARPG.Demo.EditorTools
         }
 
         /// <summary>
-        /// Swing clips onto the attack animations of a character model: the sword and axe
-        /// sets get the sword swings, the unarmed set the punch swings. Ranged weapons play
+        /// Swing clips onto the attack animations of a character model: the sword, axe and
+        /// staff sets get the sword swings, the unarmed set the punch swings. Ranged weapons play
         /// nothing here - their sound is on the item, at the launch.
         /// </summary>
         internal static bool WireModel(PlayableCharacterModel model)
@@ -818,7 +818,7 @@ namespace MultiplayerARPG.Demo.EditorTools
             {
                 SerializedProperty element = weapons.GetArrayElementAtIndex(i);
                 Object type = element.FindPropertyRelative("weaponType").objectReferenceValue;
-                if (type == null || (type.name != "Sword" && type.name != "Axe"))
+                if (type == null || (type.name != "Sword" && type.name != "Axe" && type.name != "Staff"))
                     continue;
                 SetAttackClips(element.FindPropertyRelative("rightHandAttackAnimations"), swings);
                 SetAttackClips(element.FindPropertyRelative("leftHandAttackAnimations"), swings);
@@ -829,15 +829,17 @@ namespace MultiplayerARPG.Demo.EditorTools
         }
 
         /// <summary>
-        /// The launch clip of a ranged weapon: arrows for bows, casts for staffs. The kit
-        /// picks one with Random.Range(0, Length - 1), whose upper bound is exclusive, so
-        /// the last entry can never play; it is repeated so every clip gets its turn.
+        /// The launch clip of a ranged weapon: arrows for bows. The kit picks one with
+        /// Random.Range(0, Length - 1), whose upper bound is exclusive, so the last entry can
+        /// never play; it is repeated so every clip gets its turn. Staffs had spell casts here
+        /// until they became melee weapons (2026-09-23); their swing is on the model now, and
+        /// the spells carry their own cast sounds.
         /// </summary>
         internal static void WireWeaponItem(WeaponItem item)
         {
             var serialized = new SerializedObject(item);
             Object type = serialized.FindProperty("weaponType").objectReferenceValue;
-            string prefix = type == null ? null : type.name == "Bow" ? ArrowFire : type.name == "Staff" ? SpellCast : null;
+            string prefix = type == null ? null : type.name == "Bow" ? ArrowFire : null;
             AudioClip[] clips = prefix == null ? new AudioClip[0] : Clips(prefix);
             SerializedProperty settings = serialized.FindProperty("launchClipSettings");
             if (settings == null)

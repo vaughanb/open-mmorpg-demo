@@ -102,7 +102,7 @@ namespace MultiplayerARPG.Demo.EditorTools
             new AttributeSpec
             {
                 Name = "Intelligence", Title = "Intelligence",
-                Description = "The size of the well a spell is drawn from, and how fast it refills.",
+                Description = "How hard a spell lands, the size of the well it is drawn from, and how fast that refills.",
                 Mp = 8f, MpRecovery = 0.4f,
             },
             new AttributeSpec
@@ -146,6 +146,62 @@ namespace MultiplayerARPG.Demo.EditorTools
             new Growth { Character = "Mage",    Attribute = "Vitality",     Base = 2f, PerLevel = 0.8f },
             new Growth { Character = "Mage",    Attribute = "Dexterity",    Base = 2f, PerLevel = 0.6f },
             new Growth { Character = "Mage",    Attribute = "Strength",     Base = 1f, PerLevel = 0.3f },
+        };
+
+        // ------------------------------------------------------------------
+        // Spell power
+        // ------------------------------------------------------------------
+
+        /// <summary>
+        /// Damage a spell gains per point of an attribute - the kit's
+        /// `effectivenessAttributes` on a skill, added flat to its own damage.
+        ///
+        /// Intelligence used to buy only mana, so nothing a mage grew made its spells any
+        /// stronger. Since 2026-09-23 the staff no longer throws bolts of its own and the
+        /// mage's damage is its spells, which makes Intelligence its damage stat the way
+        /// Strength is the warrior's. Per point it is lower than Strength's 1.5-2.5, because
+        /// it lands on every cast rather than on every swing, and highest on the spell with the
+        /// longest cooldown. Mend is left out: the kit only applies effectiveness to damage.
+        /// </summary>
+        private struct SpellScaling
+        {
+            public string Skill;
+            public string Attribute;
+            public float PerPoint;
+        }
+
+        private static readonly SpellScaling[] SpellPower =
+        {
+            new SpellScaling { Skill = "ArcaneBolt", Attribute = "Intelligence", PerPoint = 1.2f },
+            new SpellScaling { Skill = "FrostNova",  Attribute = "Intelligence", PerPoint = 0.8f },
+            new SpellScaling { Skill = "Meteor",     Attribute = "Intelligence", PerPoint = 2.0f },
+        };
+
+        /// <summary>
+        /// What a staff lends the spells cast through it: Intelligence, rising a point with
+        /// each refine, and on the better staff a level of Arcane Bolt on top of whatever the
+        /// mage has learned. That last is the kit's `increaseSkills` on equipment, which the
+        /// demo had not shown anywhere.
+        ///
+        /// Written here rather than by `Build Items` because both halves are made later in the
+        /// pipeline than the items: the attributes by this builder and the skill by
+        /// `Build Skills`. Written from `Build Items` they would come out null on a clean
+        /// rebuild, with nothing to say so - the same trap as the gear upkeep.
+        /// </summary>
+        private struct Focus
+        {
+            public string Item;
+            public float Intelligence;
+            public float IntelligencePerRefine;
+            public string Skill;
+            public int SkillLevels;
+        }
+
+        private static readonly Focus[] Foci =
+        {
+            new Focus { Item = "ApprenticeStaff", Intelligence = 3f, IntelligencePerRefine = 1f },
+            new Focus { Item = "ElderStaff",      Intelligence = 6f, IntelligencePerRefine = 1f,
+                        Skill = "ArcaneBolt", SkillLevels = 1 },
         };
 
         // ------------------------------------------------------------------
@@ -305,6 +361,7 @@ namespace MultiplayerARPG.Demo.EditorTools
             }
 
             int grown = ApplyGrowth(attributes);
+            int focused = WireSpellPower(attributes);
             var formulas = new List<ItemCraftFormula>();
             int skipped = 0;
             foreach (Recipe recipe in Recipes)
@@ -322,7 +379,8 @@ namespace MultiplayerARPG.Demo.EditorTools
 
             Debug.Log($"[{nameof(DemoProgressionBuilder)}] {attributes.Count} attributes written " +
                       $"({icons} with icons) and " +
-                      $"applied to {grown} class growth rows; {formulas.Count} craft formulas written" +
+                      $"applied to {grown} class growth rows; spell power on {focused} spells and staffs; " +
+                      $"{formulas.Count} craft formulas written" +
                       $"{(skipped > 0 ? $" ({skipped} skipped - missing items)" : "")}. " +
                       "Both registered in the GameDatabase. Run Build HUD afterwards so the " +
                       "attribute rows stop being hidden.");
@@ -514,6 +572,79 @@ namespace MultiplayerARPG.Demo.EditorTools
                 EditorUtility.SetDirty(character);
             }
             return rows;
+        }
+
+        /// <summary>
+        /// Writes <see cref="SpellPower"/> onto the spells and <see cref="Foci"/> onto the
+        /// staffs. Both arrays are rebuilt whole, like the growth rows, so a row taken out of
+        /// a table comes out of the asset. Returns how many assets it wrote.
+        /// </summary>
+        private static int WireSpellPower(Dictionary<string, MultiplayerARPG.Attribute> attributes)
+        {
+            int written = 0;
+            var bySkill = new Dictionary<string, List<SpellScaling>>();
+            foreach (SpellScaling scaling in SpellPower)
+            {
+                if (!bySkill.ContainsKey(scaling.Skill))
+                    bySkill[scaling.Skill] = new List<SpellScaling>();
+                bySkill[scaling.Skill].Add(scaling);
+            }
+            foreach (KeyValuePair<string, List<SpellScaling>> pair in bySkill)
+            {
+                BaseSkill skill = DemoSkillBuilder.Asset(pair.Key);
+                var serialized = skill != null ? new SerializedObject(skill) : null;
+                SerializedProperty array = serialized?.FindProperty("effectivenessAttributes");
+                if (array == null)
+                {
+                    Debug.LogWarning($"[{nameof(DemoProgressionBuilder)}] No spell \"{pair.Key}\" with effectiveness " +
+                                     "attributes to scale; run Build Skills first.");
+                    continue;
+                }
+                array.arraySize = pair.Value.Count;
+                for (int i = 0; i < pair.Value.Count; ++i)
+                {
+                    SerializedProperty entry = array.GetArrayElementAtIndex(i);
+                    entry.FindPropertyRelative("attribute").objectReferenceValue =
+                        attributes.TryGetValue(pair.Value[i].Attribute, out MultiplayerARPG.Attribute a) ? a : null;
+                    entry.FindPropertyRelative("effectiveness").floatValue = pair.Value[i].PerPoint;
+                }
+                serialized.ApplyModifiedPropertiesWithoutUndo();
+                EditorUtility.SetDirty(skill);
+                ++written;
+            }
+
+            foreach (Focus focus in Foci)
+            {
+                var item = AssetDatabase.LoadAssetAtPath<BaseItem>($"{ItemDir}/{focus.Item}.asset");
+                if (item == null)
+                {
+                    Debug.LogWarning($"[{nameof(DemoProgressionBuilder)}] No staff \"{focus.Item}\"; run Build Items first.");
+                    continue;
+                }
+                var serialized = new SerializedObject(item);
+                SerializedProperty bonus = serialized.FindProperty("increaseAttributes");
+                bonus.arraySize = 1;
+                SerializedProperty entry = bonus.GetArrayElementAtIndex(0);
+                entry.FindPropertyRelative("attribute").objectReferenceValue =
+                    attributes.TryGetValue("Intelligence", out MultiplayerARPG.Attribute intelligence) ? intelligence : null;
+                entry.FindPropertyRelative("amount.baseAmount").floatValue = focus.Intelligence;
+                entry.FindPropertyRelative("amount.amountIncreaseEachLevel").floatValue = focus.IntelligencePerRefine;
+
+                SerializedProperty skills = serialized.FindProperty("increaseSkills");
+                BaseSkill skill = string.IsNullOrEmpty(focus.Skill) ? null : DemoSkillBuilder.Asset(focus.Skill);
+                skills.arraySize = skill != null && focus.SkillLevels > 0 ? 1 : 0;
+                if (skills.arraySize == 1)
+                {
+                    SerializedProperty level = skills.GetArrayElementAtIndex(0);
+                    level.FindPropertyRelative("skill").objectReferenceValue = skill;
+                    level.FindPropertyRelative("level.baseAmount").intValue = focus.SkillLevels;
+                    level.FindPropertyRelative("level.amountIncreaseEachLevel").floatValue = 0f;
+                }
+                serialized.ApplyModifiedPropertiesWithoutUndo();
+                EditorUtility.SetDirty(item);
+                ++written;
+            }
+            return written;
         }
 
         private static ItemCraftFormula WriteRecipe(Recipe recipe)

@@ -183,6 +183,13 @@ namespace MultiplayerARPG.Demo.EditorTools
             // ---- what it leaves behind ----------------------------------------
 
             public float BuffSeconds;
+            /// <summary>
+            /// An area skill that bites once, as a burst, whatever its debuff's length. Without
+            /// it the patch stays for <see cref="BuffSeconds"/> - which is also how long the
+            /// debuff lasts - and bites every 0.75s of that, which is right for Volley's rain
+            /// and was wrong for Frost Nova (a 4s slow meant five bites).
+            /// </summary>
+            public bool Burst;
             /// <summary>Movement taken off the victim, as a share: 0.4 is a 40% slow.</summary>
             public float SlowRate;
             /// <summary>Evasion taken off the victim, as a share.</summary>
@@ -360,7 +367,11 @@ namespace MultiplayerARPG.Demo.EditorTools
                 Description = "The first thing an apprentice learns, and the last thing they stop using.",
                 Shape = Shape.Missile, Weapon = "Staff", Missile = "SpellBolt",
                 Mp = 10, MpPerLevel = 3, Cooldown = 3f, CooldownPerLevel = 0.15f, Cast = 0.6f,
-                Min = 16f, Max = 22f, PerLevel = 6f,
+                // Raised from 16-22 on 2026-09-23, when the staff stopped firing bolts of its
+                // own: the mage's damage now comes from its spells, on their cooldowns, with a
+                // weak staff swing between them. Intelligence adds to all three attacking
+                // spells on top of this (DemoProgressionBuilder.SpellPower).
+                Min = 20f, Max = 26f, PerLevel = 6f,
                 Distance = 20f,
                 Clip = "Spell_Simple_Shoot", Trigger = 0.45f, CastClip = "Spell_Simple_Idle_Loop",
                 Audio = DemoAudioWiring.SpellCast, Glyph = Glyph.Bolt,
@@ -371,7 +382,13 @@ namespace MultiplayerARPG.Demo.EditorTools
                 Description = "Cold off the floor in every direction, and nothing in it moves quickly again.",
                 Shape = Shape.Area, Weapon = "Staff",
                 Mp = 16, MpPerLevel = 4, Cooldown = 15f, CooldownPerLevel = 0.6f,
-                Min = 10f, Max = 14f, PerLevel = 4f,
+                // One burst since 2026-09-23 (`Burst`). It used to leave its patch down for
+                // as long as the slow and bite every 0.75s of it: 10-14 four or five times,
+                // about 60 a cast, which out-hit Meteor. Now it hits once, harder, and the
+                // slow still runs its full four seconds - between Arcane Bolt (one target,
+                // every 3s) and Meteor (the big one, every 25s).
+                Min = 18f, Max = 24f, PerLevel = 5f,
+                Burst = true,
                 // Cast at the mage's own feet, which is the whole shape of the skill: it is
                 // what a mage does when something has already reached them.
                 Distance = 0f, Radius = 4.5f,
@@ -400,7 +417,7 @@ namespace MultiplayerARPG.Demo.EditorTools
                 Description = "Slow to call down, and worth the wait if it lands on the right patch of ground.",
                 Shape = Shape.Area, Weapon = "Staff",
                 Mp = 32, MpPerLevel = 6, Cooldown = 25f, CooldownPerLevel = 1f, Cast = 1.4f,
-                Min = 26f, Max = 34f, PerLevel = 10f,
+                Min = 32f, Max = 42f, PerLevel = 10f,
                 Distance = 18f, Radius = 5f,
                 BuffSeconds = 1.2f,
                 // UAL1's two-handed spell pair: the staff held out in both hands through the
@@ -687,12 +704,32 @@ namespace MultiplayerARPG.Demo.EditorTools
             // How long the patch lasts, and how often it bites. Volley keeps raining for
             // three seconds and applies every three quarters of one; the meteor lands
             // once and is gone.
-            Set(serialized, "areaDuration.baseAmount", spec.BuffSeconds);
-            Set(serialized, "applyDuration.baseAmount", spec.BuffSeconds > 2f ? 0.75f : spec.BuffSeconds);
+            //
+            // A burst bites exactly once. The kit's area applies its first bite one
+            // `applyDuration` after it appears (not on arrival) and is put away after
+            // `areaDuration`, so a patch that lives 0.5s and bites every 0.3s bites at 0.3s
+            // and is gone before a second could come. The debuff it leaves is separate and
+            // keeps its full `BuffSeconds`.
+            if (spec.Burst)
+            {
+                Set(serialized, "areaDuration.baseAmount", BurstSeconds);
+                Set(serialized, "applyDuration.baseAmount", BurstBite);
+            }
+            else
+            {
+                Set(serialized, "areaDuration.baseAmount", spec.BuffSeconds);
+                Set(serialized, "applyDuration.baseAmount", spec.BuffSeconds > 2f ? 0.75f : spec.BuffSeconds);
+            }
 
             serialized.FindProperty("areaDamageEntity").objectReferenceValue = BuildArea(spec, areaSprite);
             WriteDebuff(serialized, spec);
         }
+
+        /// <summary>How long a burst's patch lives, in seconds. See <see cref="SkillSpec.Burst"/>.</summary>
+        private const float BurstSeconds = 0.5f;
+
+        /// <summary>When a burst bites: shortly after it appears, as the ring goes out.</summary>
+        private const float BurstBite = 0.3f;
 
         /// <summary>A <see cref="SimpleDashAttackSkill"/>: the warrior's charge.</summary>
         private static void WriteDashSkill(SerializedObject serialized, SkillSpec spec)
@@ -1065,7 +1102,7 @@ namespace MultiplayerARPG.Demo.EditorTools
                 // particles are parented straight on and play on awake. The entity lives
                 // exactly as long as the patch does, so they do too, for free.
                 DemoSkillEffectBuilder.AddAreaParticles(root, spec.AreaColour, spec.Radius,
-                                                        lingers: spec.BuffSeconds > 2f);
+                                                        lingers: !spec.Burst && spec.BuffSeconds > 2f);
 
                 var entity = root.AddComponent<AreaDamageEntity>();
                 entity.canApplyDamageToUser = false;

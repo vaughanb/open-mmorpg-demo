@@ -105,9 +105,9 @@ namespace MultiplayerARPG.Demo.EditorTools
             public float MissileSpeed;
         }
 
-        // One type per class: the warrior swings, the ranger shoots, the mage casts. The axe
-        // is nobody's class weapon — it is what the bandits carry, and a warrior can pick one
-        // up and use it.
+        // One type per class: the warrior swings, the ranger shoots, and the mage swings a
+        // staff between spells. The axe is nobody's class weapon — it is what the bandits
+        // carry, and a warrior can pick one up and use it.
         private static readonly WeaponSpec[] WeaponSpecs =
         {
             new WeaponSpec { Name = "Sword", Title = "Sword", EquipType = WeaponItemEquipType.MainHandOnly,
@@ -117,9 +117,17 @@ namespace MultiplayerARPG.Demo.EditorTools
             new WeaponSpec { Name = "Bow", Title = "Bow", EquipType = WeaponItemEquipType.TwoHand,
                 HitDistance = 2f, HitFov = 60f, Damage = DamageType.Missile,
                 Missile = "ArrowMissile", MissileDistance = 18f, MissileSpeed = 38f },
+            // A two-handed swing, not a bolt (2026-09-23). The staff used to fire the same
+            // SpellBolt as Arcane Bolt, 14 metres out, as fast as the clip would loop - which
+            // made the basic attack the spell with no mana cost and no cooldown, and the spell
+            // pointless beside it, and gave the mage free ranged attacks while the ranger pays
+            // an arrow for each. Now the mage's damage is its spells (DemoSkillBuilder, scaled
+            // by Intelligence in DemoProgressionBuilder), the staff is a weak swing for the gaps
+            // between them, and the staff's real worth is the Intelligence it lends the spells.
+            // The Hierophant, who carries the Elder Staff and already fought at two metres,
+            // now visibly swings it too.
             new WeaponSpec { Name = "Staff", Title = "Staff", EquipType = WeaponItemEquipType.TwoHand,
-                HitDistance = 3.0f, HitFov = 70f, Damage = DamageType.Missile,
-                Missile = "SpellBolt", MissileDistance = 14f, MissileSpeed = 22f },
+                HitDistance = 2.2f, HitFov = 90f, Damage = DamageType.Melee },
             // Fists. The asset already existed but nothing authored it, so it sat on the kit's
             // defaults with the same half-metre `startAttackDistance` the sword had - a
             // character with nothing equipped could not reach anything either. Shorter and
@@ -171,6 +179,9 @@ namespace MultiplayerARPG.Demo.EditorTools
                     // at arm's length, with enough margin that a moving target is still inside
                     // `hitDistance` when the blow actually lands.
                     serialized.FindProperty("damageInfo.startAttackDistance").floatValue = spec.HitDistance * 0.85f;
+                    // A type that used to be ranged keeps its missile otherwise (the staff did).
+                    // The kit ignores it for melee, but the asset would still say "SpellBolt".
+                    serialized.FindProperty("damageInfo.missileDamageEntity").objectReferenceValue = null;
                 }
                 serialized.ApplyModifiedPropertiesWithoutUndo();
                 EditorUtility.SetDirty(type);
@@ -328,13 +339,15 @@ namespace MultiplayerARPG.Demo.EditorTools
             new ItemSpec { Name = "BanditAxe", Title = "Bandit Axe", Description = "Taken from the camp on the headland.",
                 Model = "Axe", TypeAsset = "Axe", Min = 10f, Max = 16f, Price = 80, Weight = 3f },
             new ItemSpec { Name = "ApprenticeStaff", Title = "Apprentice Staff", Description = "The stone at its tip is still warm.",
-                Model = "MageStaff", TypeAsset = "Staff", Min = 9f, Max = 14f, Price = 100, Weight = 2.5f },
+                // The weakest melee weapon in the game on purpose; it is a focus, not a club.
+                // Its Intelligence is written by DemoProgressionBuilder, which owns attributes.
+                Model = "MageStaff", TypeAsset = "Staff", Min = 5f, Max = 8f, Price = 100, Weight = 2.5f },
             new ItemSpec { Name = "HuntingBow", Title = "Hunting Bow", Description = "Ash and sinew. Made for deer, not for men.",
                 Model = "Bow", TypeAsset = "Bow", Min = 7f, Max = 11f, Price = 70, Weight = 1.8f },
             new ItemSpec { Name = "YewLongbow", Title = "Yew Longbow", Description = "Taller than the archer, and slow to draw.",
                 Model = "Bow", TypeAsset = "Bow", Min = 13f, Max = 19f, Price = 150, Weight = 2.4f },
             new ItemSpec { Name = "ElderStaff", Title = "Elder Staff", Description = "Cut from a tree that was old when the island was settled.",
-                Model = "MageStaff", TypeAsset = "Staff", Min = 14f, Max = 20f, Price = 160, Weight = 3f },
+                Model = "MageStaff", TypeAsset = "Staff", Min = 8f, Max = 12f, Price = 160, Weight = 3f },
         };
 
         private static void BuildWeapons()

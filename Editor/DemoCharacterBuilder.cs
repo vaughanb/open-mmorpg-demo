@@ -222,6 +222,66 @@ namespace MultiplayerARPG.Demo.EditorTools
                       "Run Collect Demo Art after, so any newly used library clip is extracted into the demo.");
         }
 
+        /// <summary>
+        /// Re-applies the weapons' attack clips to every character model, and touches nothing
+        /// else - the same bargain as <see cref="RefreshSkillAnimations"/>, for the basic attack.
+        ///
+        /// Written for the staff becoming a melee weapon (2026-09-23): a new swing without
+        /// `Build Character Models` and the entity chain behind it. Only each weapon set's
+        /// right- and left-hand attack arrays are replaced, from the same
+        /// `DemoAnimationSet.BuildWeaponAnimations` the full build uses, so idles, moves and
+        /// anything a later pass has set on a model are left as they are. Bows are skipped:
+        /// their attack depends on whether that character can charge a shot, which only the
+        /// full build knows.
+        /// </summary>
+        [MenuItem("Open MMORPG/Demo/Refresh Weapon Attacks")]
+        public static void RefreshWeaponAttacks()
+        {
+            var fresh = new System.Collections.Generic.Dictionary<WeaponType, WeaponAnimations>();
+            foreach (WeaponAnimations built in DemoAnimationSet.BuildWeaponAnimations(false))
+            {
+                if (built.weaponType != null && built.weaponType.name != "Bow")
+                    fresh[built.weaponType] = built;
+            }
+            int refreshed = 0;
+            foreach (string guid in AssetDatabase.FindAssets("t:Prefab", new[] { ModelOutDir }))
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guid);
+                var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
+                var existing = prefab != null ? prefab.GetComponent<PlayableCharacterModel>() : null;
+                if (existing == null || existing.weaponAnimations == null || existing.weaponAnimations.Length == 0)
+                    continue;
+                GameObject root = PrefabUtility.LoadPrefabContents(path);
+                try
+                {
+                    var model = root.GetComponent<PlayableCharacterModel>();
+                    WeaponAnimations[] sets = model.weaponAnimations;
+                    bool changed = false;
+                    for (int i = 0; i < sets.Length; ++i)
+                    {
+                        if (sets[i].weaponType == null || !fresh.TryGetValue(sets[i].weaponType, out WeaponAnimations built))
+                            continue;
+                        sets[i].rightHandAttackAnimations = built.rightHandAttackAnimations;
+                        sets[i].leftHandAttackAnimations = built.leftHandAttackAnimations;
+                        changed = true;
+                    }
+                    if (!changed)
+                        continue;
+                    model.weaponAnimations = sets;
+                    DemoAudioWiring.WireModel(model);
+                    PrefabUtility.SaveAsPrefabAsset(root, path);
+                    ++refreshed;
+                }
+                finally
+                {
+                    PrefabUtility.UnloadPrefabContents(root);
+                }
+            }
+            AssetDatabase.SaveAssets();
+            Debug.Log($"[{nameof(DemoCharacterBuilder)}] Refreshed the weapon attacks on {refreshed} character model(s). " +
+                      "Run Collect Demo Art after, so any newly used library clip is extracted into the demo.");
+        }
+
         [MenuItem("Open MMORPG/Demo/Build Character Models")]
         public static void BuildAll()
         {

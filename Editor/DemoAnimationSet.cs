@@ -1015,7 +1015,15 @@ namespace MultiplayerARPG.Demo.EditorTools
         }
 
         /// <summary>
-        /// Magic staff: the mage's own idle, and the shot is the ranged attack.
+        /// Magic staff: the mage's own idle, and a two-handed swing for the attack.
+        ///
+        /// The attack was `Spell_Simple_Shoot` until 2026-09-23, back when the staff fired
+        /// bolts; it is now a melee weapon (see `DemoItemBuilder`'s Staff), and the spells are
+        /// the skills. The swing is UAL2's `Sword_Heavy_A`, a two-handed sweep from the right
+        /// hip across the front, measured on the male body in the hips' own frame: the hand is
+        /// fastest at 0.53 of the clip (15 m/s) and furthest forward at 0.63, so the blow lands
+        /// at <see cref="StaffSwingTrigger"/>. `Sword_Heavy_B` was the other candidate and is a
+        /// follow-through, not a blow - it ends with the hands behind the body.
         ///
         /// The idle is <c>Mage_Idle</c>, authored for this demo and living in
         /// <see cref="DemoArtCollector.ClipDir"/> rather than in the library - the first
@@ -1048,8 +1056,27 @@ namespace MultiplayerARPG.Demo.EditorTools
                 hurtState = Action("Hit_Chest"),
                 deadState = State("Death01"),
                 pickupState = Action("PickUp_Table"),
-                rightHandAttackAnimations = new[] { Attack("Spell_Simple_Shoot", 0.45f) },
+                rightHandAttackAnimations = new[] { StaffSwing() },
             };
         }
     }
 }
+
+        /// <summary>Where the staff's blow lands, as a fraction of the swing. See <see cref="BuildMagic"/>.</summary>
+        public const float StaffSwingTrigger = 0.58f;
+
+        /// <summary>
+        /// Seconds the mage holds after a staff swing before the next can start. The swing is
+        /// 0.73s, which on its own would be a blow and a half a second - a flurry, which is not
+        /// what a staff is for. Held, it comes round about as often as the warrior's sword and
+        /// hits for a fraction of it, which is the point: between spells, not instead of them.
+        /// </summary>
+        public const float StaffSwingRecovery = 0.55f;
+
+        public static ActionAnimation StaffSwing()
+        {
+            ActionAnimation swing = Attack("Sword_Heavy_A", StaffSwingTrigger,
+                                           audio: DemoAudioWiring.Clips(DemoAudioWiring.SwordSwing));
+            swing.extendDuration = StaffSwingRecovery;
+            return swing;
+        }
