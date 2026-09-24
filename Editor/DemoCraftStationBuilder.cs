@@ -279,6 +279,10 @@ namespace MultiplayerARPG.Demo.EditorTools
                 else
                 {
                     Object.DestroyImmediate(go.GetComponent<WorkbenchEntity>());
+                    // The click box Attach put on it, which furniture never has of its own.
+                    var box = go.GetComponent<BoxCollider>();
+                    if (box != null && box.isTrigger)
+                        Object.DestroyImmediate(box);
                     Debug.Log($"[{nameof(DemoCraftStationBuilder)}] \"{go.name}\" is furniture again; " +
                               "its station moved elsewhere.");
                 }
@@ -399,16 +403,29 @@ namespace MultiplayerARPG.Demo.EditorTools
                 life.floatValue = 0f;
             serialized.ApplyModifiedPropertiesWithoutUndo();
 
-            // Something to aim at. The Quaternius props carry no collider of their own, and
-            // the activate key works by casting at what is under the cursor - see
-            // [[demo-scene-traversability]] on the door handles, which is the same trap:
-            // the handle has to be reachable by a ray or it is wired and invisible.
-            if (host.GetComponentInChildren<Collider>() == null)
+            // Something to aim at, on the station's own object. A click resolves to the
+            // transform of the collider it hits and looks for the entity *there*, not in its
+            // parents (`PlayerCharacterController.UpdateInput`: `GetComponent<ITargetableEntity>`
+            // on `GetRaycastTransform`) - so a collider on a child is a wall, and the kit takes
+            // the click for a click on the ground. That is how three of the four stations went
+            // dead to the mouse (found 2026-09-24): the cookfire, the anvil and the potion stall
+            // are Quaternius furniture whose only collider is their `Collision` child, and this
+            // used to add a box only when there was no collider anywhere. The Fletcher's Bench,
+            // built from bare props, got one and was the only station that answered a click.
+            // Same trap as the door handles ([[demo-scene-traversability]]).
+            if (host.GetComponent<Collider>() == null)
             {
-                Bounds bounds = Measure(host);
+                bool solidAlready = host.GetComponentInChildren<Collider>() != null;
+                Bounds local = MeasureLocal(host);
                 var box = host.AddComponent<BoxCollider>();
-                box.center = host.transform.InverseTransformPoint(bounds.center);
-                box.size = bounds.size == Vector3.zero ? Vector3.one : bounds.size;
+                box.center = local.center;
+                box.size = local.size == Vector3.zero ? Vector3.one : local.size;
+                // Furniture that is already solid gets a trigger: this box is only there to
+                // be clicked, the click search checks for an entity before it skips a trigger,
+                // and a second solid shell round the prop would only widen what the navmesh
+                // (baked from physics colliders) carves around it. A group of bare props has
+                // nothing else to stand in the way, so its box stays solid.
+                box.isTrigger = solidAlready;
             }
 
             if (station.KeepLit)
@@ -510,8 +527,10 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// particles may occupy - 34m by 22m for that one, against 0.8m of actual firepit.
         /// This measurement sizes the collider a player activates the station through, so
         /// including the flame would have wrapped the whole village green in a box. It only
-        /// escaped because the Quaternius props ship their own `Collision` meshes and the
-        /// box was never added. The same inflated bounds once made every brazier look buried.
+        /// escaped at first because the Quaternius props ship their own `Collision` meshes and
+        /// the box was never added to them; since 2026-09-24 it is (see `Attach`), sized by
+        /// <see cref="MeasureLocal"/>, which leaves particles out the same way. The same
+        /// inflated bounds once made every brazier look buried.
         /// </summary>
         private static Bounds Measure(GameObject root)
         {
@@ -525,6 +544,35 @@ namespace MultiplayerARPG.Demo.EditorTools
                 else bounds.Encapsulate(renderer.bounds);
             }
             return any ? bounds : new Bounds(root.transform.position, Vector3.one);
+        }
+
+        /// <summary>
+        /// <see cref="Measure"/> in the prop's own frame, for a collider on it. A world-space
+        /// box is only right for a prop that is not turned, and the anvil stands in a smithy
+        /// that is. Same exclusion of particle renderers, for the same reason.
+        /// </summary>
+        private static Bounds MeasureLocal(GameObject root)
+        {
+            Transform frame = root.transform;
+            Bounds bounds = default;
+            bool any = false;
+            foreach (Renderer renderer in root.GetComponentsInChildren<Renderer>(true))
+            {
+                if (renderer is ParticleSystemRenderer)
+                    continue;
+                Bounds own = renderer.localBounds;
+                for (int i = 0; i < 8; ++i)
+                {
+                    var corner = new Vector3(
+                        (i & 1) == 0 ? own.min.x : own.max.x,
+                        (i & 2) == 0 ? own.min.y : own.max.y,
+                        (i & 4) == 0 ? own.min.z : own.max.z);
+                    Vector3 point = frame.InverseTransformPoint(renderer.transform.TransformPoint(corner));
+                    if (!any) { bounds = new Bounds(point, Vector3.zero); any = true; }
+                    else bounds.Encapsulate(point);
+                }
+            }
+            return any ? bounds : new Bounds(Vector3.zero, Vector3.one);
         }
 
         /// <summary>

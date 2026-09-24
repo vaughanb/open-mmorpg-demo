@@ -197,6 +197,14 @@ namespace MultiplayerARPG.Demo.EditorTools
 
             var tracker = new GameObject(QuestTrackerName, typeof(RectTransform), typeof(CanvasGroup));
             tracker.transform.SetParent(canvas.transform, false);
+            // Beside the party half it came from, which is under every window. A new child goes
+            // to the end of the canvas, and the end is drawn last and hit-tested first: the
+            // tracker sat over the whole of UIDialogs_Standalone, the system menu and the
+            // settings, and its quest rows - clickable images 256px wide down the right edge -
+            // took the clicks meant for whatever opened there. The inventory opens right there,
+            // and its title bar and close button were under the rows (found 2026-09-24). Here,
+            // a window drawn over the tracker hides it and gets the clicks, as WoW's bags do.
+            tracker.transform.SetSiblingIndex(panel.GetSiblingIndex() + 1);
             var trackerRect = (RectTransform)tracker.transform;
             trackerRect.anchorMin = trackerRect.anchorMax = new Vector2(1f, 1f);
             trackerRect.pivot = new Vector2(1f, 1f);

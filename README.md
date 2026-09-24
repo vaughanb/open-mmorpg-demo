@@ -217,6 +217,12 @@ Each step consumes the previous one's output, so run them in this order:
     repaint of the menu panels. Rewrites the `MenuStage` root in `01Home.unity` and edits
     `CanvasGlobal`/`CanvasHome`. Independent of the rest; re-run after changing the
     backdrop art.
+13e. `Open MMORPG > Demo > Make Windows Draggable` - puts `DemoWindowDrag` on every in-game
+    window's title bar (the template's `Window/Title`), so windows move by their title, stay on
+    screen, come to the front when grabbed, and remember where they were left; a double-click
+    on the title puts one back. Added to each **dialog prefab**, not the canvases that nest
+    them, so it reaches every canvas without per-instance overrides. The home screens are left
+    alone. Safe to re-run; it only adds what is missing.
 14. `Open MMORPG > Demo > Build Player Controller`
 14a. `Open MMORPG > Demo > Build Feedback Effects` - the in-world feedback the template left
     broken: animator controllers for the six damage/heal numbers (they sat at alpha 0 with no
