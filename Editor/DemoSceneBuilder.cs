@@ -1,4 +1,4 @@
-﻿using Unity.AI.Navigation;
+using Unity.AI.Navigation;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
@@ -199,6 +199,10 @@ namespace MultiplayerARPG.Demo.EditorTools
         [MenuItem("Open MMORPG/Demo/Regenerate Island Scene (destroys hand edits)")]
         public static void Build()
         {
+            // Opening the map replaces whatever is open, and OpenScene does not ask: unsaved
+            // edits to DemoMap - work under Authored included - would simply be gone.
+            if (!EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo())
+                return;
             Scene scene = EditorSceneManager.OpenScene(ScenePath, OpenSceneMode.Single);
 
             var hidden = new System.Collections.Generic.List<GameObject>();
@@ -245,6 +249,11 @@ namespace MultiplayerARPG.Demo.EditorTools
             // And the sea floor is taken out of the walkable ground, so that nothing
             // which walks wanders, chases or bolts into the water.
             EnsureSeaCarve(terrain);
+            // The chest props the areas put down become loot chests, before the bake so
+            // their colliders are what it sees. See DemoTreasureBuilder.
+            DemoTreasureBuilder.ConvertScene(scene);
+            // And the village doors get their network half, so every player sees the same door.
+            DemoDoorNetworkBuilder.NetworkDoors(scene);
             // A bench seat is walkable ground to a bake unless it is told otherwise.
             MarkFurnitureUnwalkable(scene);
             // The NPCs and the horse stand on the green with a capsule each, which the
@@ -255,6 +264,10 @@ namespace MultiplayerARPG.Demo.EditorTools
             BakeWithDoorsOpen(surface);
             foreach (GameObject root in hidden)
                 root.SetActive(true);
+
+            // After the bake, because each spot is checked against the navmesh. An area left
+            // without spots finds its own ground, and misses everything downhill of its centre.
+            DemoSpawnSpotBaker.Bake(scene);
 
             CheckArrivalIsClear();
 
@@ -297,6 +310,10 @@ namespace MultiplayerARPG.Demo.EditorTools
         [MenuItem("Open MMORPG/Demo/Regenerate Settled Areas (village, camp, crypt, cliffs)", priority = 112)]
         public static void RegenerateSettledAreas()
         {
+            // Opening the map replaces whatever is open, and OpenScene does not ask: unsaved
+            // edits to DemoMap - work under Authored included - would simply be gone.
+            if (!EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo())
+                return;
             Scene scene = EditorSceneManager.OpenScene(ScenePath, OpenSceneMode.Single);
 
             int removed = 0;
@@ -313,6 +330,11 @@ namespace MultiplayerARPG.Demo.EditorTools
             // regenerate uses.
             DemoFlameBuilder.Build();
             BuildSettledAreas(scene, new System.Collections.Generic.HashSet<string>());
+            // The areas furnish with chest props; the chests the player can open are
+            // entities swapped in over them. See DemoTreasureBuilder.
+            DemoTreasureBuilder.ConvertScene(scene);
+            // The village's doors are rebuilt with it; give them their network half again.
+            DemoDoorNetworkBuilder.NetworkDoors(scene);
 
             EditorSceneManager.MarkSceneDirty(scene);
             EditorSceneManager.SaveScene(scene);
@@ -488,10 +510,34 @@ namespace MultiplayerARPG.Demo.EditorTools
             // out far enough to reach the horizon.
             RenderSettings.fog = true;
             RenderSettings.fogMode = FogMode.Linear;
-            RenderSettings.fogStartDistance = 180f;
-            RenderSettings.fogEndDistance = 620f;
+            RenderSettings.fogStartDistance = ClearFogStart;
+            RenderSettings.fogEndDistance = ClearFogEnd;
 
             BuildSkyCycle(scene, light, sky);
+            BuildWind(scene);
+            // After both: the weather hands the cloud to the cycle and the storm to the wind.
+            DemoWeatherBuilder.Build(scene);
+        }
+
+        /// <summary>
+        /// How far the haze reaches on a clear day. The scene's fog is set from these, and
+        /// <see cref="MultiplayerARPG.DayNightSkyCycle"/> - which moves the distances in when it clouds
+        /// over - is given the same two numbers, so the clear day and the day the cycle returns to are one.
+        /// </summary>
+        public const float ClearFogStart = 180f;
+        public const float ClearFogEnd = 620f;
+
+        /// <summary>
+        /// The island's wind: one component that drives the foliage shaders (the trees, bushes and
+        /// the terrain's grass) and hands them the terrain's heightmap. Tuning lives on the
+        /// component - strength, direction, how hard trees and grass lean - and the materials need
+        /// nothing, since with no FoliageWind in a scene the wind is simply off. See
+        /// <see cref="DemoWindMaterials"/> for how the foliage gets onto the shaders.
+        /// </summary>
+        private static void BuildWind(Scene scene)
+        {
+            GameObject go = Root(scene, "Wind");
+            go.AddComponent<MultiplayerARPG.FoliageWind>();
         }
 
         /// <summary>
@@ -509,7 +555,7 @@ namespace MultiplayerARPG.Demo.EditorTools
         private static void BuildSkyCycle(Scene scene, Light sun, Material sky)
         {
             GameObject go = Root(scene, "SkyCycle");
-            var cycle = go.AddComponent<MultiplayerARPG.Demo.DemoSkyCycle>();
+            var cycle = go.AddComponent<MultiplayerARPG.DayNightSkyCycle>();
             cycle.sun = sun;
             cycle.sky = sky;
             cycle.sunrise = 6f;
@@ -756,7 +802,7 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// The island's two ambience beds and its music, under the sea root so `Rebuild Sea` renews
         /// them: the nature loop everywhere, and the waves loud on the beach, half-heard in
         /// the village and a murmur in the middle of the island. Each is a 2D loop driven by
-        /// <see cref="MultiplayerARPG.Demo.DemoAmbientLoop"/>, which follows the ambient
+        /// <see cref="MultiplayerARPG.AmbientSoundLoop"/>, which follows the ambient
         /// volume setting. A bed whose clip is not provided yet is simply not built;
         /// DemoAudioWiring lists what is missing.
         ///
@@ -774,7 +820,7 @@ namespace MultiplayerARPG.Demo.EditorTools
             var root = new GameObject("Ambience");
             root.transform.SetParent(sea.transform, false);
             AmbientBed(root, "Nature", DemoAudioWiring.Clips(DemoAudioWiring.AmbientNature), 0.5f, false);
-            MultiplayerARPG.Demo.DemoAmbientLoop shore = AmbientBed(root, "Shore", DemoAudioWiring.Clips(DemoAudioWiring.OceanWaves), 0.8f, true);
+            MultiplayerARPG.AmbientSoundLoop shore = AmbientBed(root, "Shore", DemoAudioWiring.Clips(DemoAudioWiring.OceanWaves), 0.8f, true);
             if (shore != null)
             {
                 shore.fadeWithShoreDistance = true;
@@ -827,7 +873,7 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// an island this size would be wallpaper inside an hour.
         ///
         /// **And it does not follow a running order.** With more than one island track,
-        /// <see cref="MultiplayerARPG.Demo.DemoMusicPlayer"/> picks at random and never
+        /// <see cref="MultiplayerARPG.MusicPlayer"/> picks at random and never
         /// repeats the piece it just played.
         /// </summary>
         private static void BuildMusic(GameObject parent)
@@ -841,9 +887,9 @@ namespace MultiplayerARPG.Demo.EditorTools
             source.playOnAwake = false;
             source.spatialBlend = 0f;
             source.volume = 0f;
-            var music = go.AddComponent<MultiplayerARPG.Demo.DemoMusicPlayer>();
+            var music = go.AddComponent<MultiplayerARPG.MusicPlayer>();
             music.tracks = tracks;
-            music.mode = MultiplayerARPG.Demo.DemoMusicPlayer.PlayMode.Occasional;
+            music.mode = MultiplayerARPG.MusicPlayer.PlayMode.Occasional;
             music.volume = DemoAudioWiring.IslandMusicVolume;
             music.firstGapMin = LoginDelay;
             music.firstGapMax = LoginDelay;
@@ -869,7 +915,7 @@ namespace MultiplayerARPG.Demo.EditorTools
         private const float GapMin = 120f;
         private const float GapMax = 300f;
 
-        private static MultiplayerARPG.Demo.DemoAmbientLoop AmbientBed(GameObject parent, string name, AudioClip[] clips, float volume, bool fadeWithHeight)
+        private static MultiplayerARPG.AmbientSoundLoop AmbientBed(GameObject parent, string name, AudioClip[] clips, float volume, bool fadeWithHeight)
         {
             if (clips.Length == 0)
                 return null;
@@ -881,7 +927,7 @@ namespace MultiplayerARPG.Demo.EditorTools
             source.playOnAwake = true;
             source.spatialBlend = 0f;
             source.volume = volume;
-            var loop = go.AddComponent<MultiplayerARPG.Demo.DemoAmbientLoop>();
+            var loop = go.AddComponent<MultiplayerARPG.AmbientSoundLoop>();
             loop.baseVolume = volume;
             loop.fadeWithHeight = fadeWithHeight;
             loop.seaLevel = DemoIslandBuilder.WaterLevel;
@@ -1076,6 +1122,10 @@ namespace MultiplayerARPG.Demo.EditorTools
         [MenuItem("Open MMORPG/Demo/Rebake Island Navmesh", priority = 110)]
         public static void RebakeNavMesh()
         {
+            // Opening the map replaces whatever is open, and OpenScene does not ask: unsaved
+            // edits to DemoMap - work under Authored included - would simply be gone.
+            if (!EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo())
+                return;
             Scene scene = EditorSceneManager.OpenScene(ScenePath, OpenSceneMode.Single);
 
             NavMeshSurface surface = null;
@@ -1128,6 +1178,10 @@ namespace MultiplayerARPG.Demo.EditorTools
                     root.SetActive(true);
             }
 
+            // The spawn areas' spots were checked against the old navmesh. A wall moved or a
+            // bench marked since can leave one in a hole, so they are checked again with it.
+            DemoSpawnSpotBaker.Bake(scene);
+
             EditorSceneManager.MarkSceneDirty(scene);
             EditorSceneManager.SaveScene(scene);
             AssetDatabase.SaveAssets();
@@ -1175,7 +1229,7 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// where it may go gets the right answer for free:
         ///
         /// * wandering and chasing are `NavMeshAgent` paths, which cannot enter a hole;
-        /// * <see cref="MultiplayerARPG.Demo.DemoFlee"/> already samples the navmesh and
+        /// * <see cref="MultiplayerARPG.FleeWhenHurt"/> already samples the navmesh and
         ///   swings its escape line round until it finds somewhere valid - its own notes
         ///   list the sea as a case it handles, and it failed only because the sea was
         ///   walkable, so the first sample succeeded and the deer ran into the water;
@@ -1239,8 +1293,8 @@ namespace MultiplayerARPG.Demo.EditorTools
         private static void BakeWithDoorsOpen(NavMeshSurface surface)
         {
             var doors = new System.Collections.Generic.List<Collider>();
-            foreach (MultiplayerARPG.Demo.DemoDoor door in
-                Object.FindObjectsByType<MultiplayerARPG.Demo.DemoDoor>(FindObjectsInactive.Include, FindObjectsSortMode.None))
+            foreach (MultiplayerARPG.SceneryDoor door in
+                Object.FindObjectsByType<MultiplayerARPG.SceneryDoor>(FindObjectsInactive.Include, FindObjectsSortMode.None))
             {
                 if (door.pivot == null)
                     continue;
@@ -1376,7 +1430,7 @@ namespace MultiplayerARPG.Demo.EditorTools
             // reads as a bug. The night schedule here is what the fire is when nothing is
             // cooked on it, and it is what a regenerate restores - which is one of the
             // reasons Build Craft Stations has to be run after one.
-            Kindle(firepit, BrazierFlame, DemoFlameBuilder.CampfireFlamePath, MultiplayerARPG.Demo.DemoTorch.Schedule.Night);
+            Kindle(firepit, BrazierFlame, DemoFlameBuilder.CampfireFlamePath, MultiplayerARPG.TimeOfDayLight.Schedule.Night);
 
             // The smith's yard, out in front of the smith's own house rather than off on
             // its own: it used to stand on the far side of the green, which put it inside
@@ -1416,7 +1470,7 @@ namespace MultiplayerARPG.Demo.EditorTools
         private static readonly Vector3 BrazierFlame = new Vector3(0f, 0.85f, 0f);
 
         /// <summary>Puts a flame on something, at a point in its own space.</summary>
-        private static MultiplayerARPG.Demo.DemoTorch Kindle(GameObject holder, Vector3 at, string flame, MultiplayerARPG.Demo.DemoTorch.Schedule schedule)
+        private static MultiplayerARPG.TimeOfDayLight Kindle(GameObject holder, Vector3 at, string flame, MultiplayerARPG.TimeOfDayLight.Schedule schedule)
         {
             if (holder == null)
                 return null;
@@ -1507,7 +1561,7 @@ namespace MultiplayerARPG.Demo.EditorTools
                 ? new Vector3(along - bounds.center.x, TorchHeight - bounds.min.y, face + embed - bounds.max.z)
                 : new Vector3(face + embed - bounds.max.x, TorchHeight - bounds.min.y, along - bounds.center.z);
             torch.transform.localPosition += move;
-            Kindle(torch, TorchFlame, DemoFlameBuilder.TorchFlamePath, MultiplayerARPG.Demo.DemoTorch.Schedule.Night);
+            Kindle(torch, TorchFlame, DemoFlameBuilder.TorchFlamePath, MultiplayerARPG.TimeOfDayLight.Schedule.Night);
         }
 
         /// <summary>
@@ -1837,6 +1891,58 @@ namespace MultiplayerARPG.Demo.EditorTools
         private const float LadderHalfDepth = 0.05f;
 
         /// <summary>
+        /// The ladder model's rungs: nine to a section, the lowest centred this far up and
+        /// the rest at this spacing, centred this far along +Z (toward what the ladder leans
+        /// on) of the model's plane, with this radius. Measured off the mesh 2026-10-02; the
+        /// flat bar at the very top is the rails' cap, not a rung.
+        /// </summary>
+        private const int RungsPerSection = 9;
+        private const float RungFirst = 0.245f;
+        private const float RungSpacing = 0.311f;
+        private const float RungCentreZ = 0.004f;
+        private const float RungRadius = 0.037f;
+        private const float RungHalfWidth = 0.25f;
+
+        /// <summary>
+        /// How much wider than the model the watchtower's ladder is. The pack's ladder is
+        /// 0.55 m across, a narrow thing the climb clips were plainly not authored for: the
+        /// hands swing half a metre out to the sides and had to be pulled in to the rails.
+        /// Twice as wide takes the animation as it comes (user, 2026-10-02).
+        /// </summary>
+        private const float LadderWidth = 2f;
+
+        /// <summary>The gap left in the deck railing for the ladder to rise through: the ladder, plus a hand either side.</summary>
+        private const float RailGap = 0.547f * LadderWidth + 0.3f;
+
+        /// <summary>
+        /// How much taller than the model each of the watchtower's two ladder sections is
+        /// stretched, so that stacked they reach a rung or two above the kerb.
+        /// </summary>
+        public static float WatchtowerLadderStretch
+        {
+            get
+            {
+                float kerb = (WatchtowerStoreys - 1) * DemoVillageBuilder.WallHeight + WallModuleHeight;
+                return (kerb + 0.3f) / (2f * LadderHeight);
+            }
+        }
+
+        /// <summary>The distance between the watchtower ladder's rungs in the scene, stretch and all.</summary>
+        public static float WatchtowerRungSpacing
+        {
+            get { return RungSpacing * WatchtowerLadderStretch; }
+        }
+
+        /// <summary>
+        /// How far below the deck the top of the climb line sits: where the climber's feet are
+        /// when their hands are on the top rung (the ladder stands 0.4 m proud of the deck).
+        /// The kit needed the line to end above the kerb so its character controller could be
+        /// moved onto the boards, and the climber stood on air beside them; the demo's ladder
+        /// component carries the character over the kerb itself (see EasedCharacterLadderComponent).
+        /// </summary>
+        private const float TopHang = 1.0f;
+
+        /// <summary>
         /// A watchtower on the edge of the green, with a ladder up the outside to an open
         /// deck under a roof. It is there to show that climbing works: the kit has a ladder
         /// system, and nothing else in the demo uses it.
@@ -1906,8 +2012,8 @@ namespace MultiplayerARPG.Demo.EditorTools
 
             // Railings stand on the wall tops. The rail is modelled a cell out along the
             // module's -Z, so each is placed a cell in from the edge it guards and turned
-            // to put that side outward. The ladder side has a metre's gap in the middle
-            // for the ladder, each half's rail shortened to leave it.
+            // to put that side outward. The ladder side has a gap in the middle for the
+            // ladder (RailGap), each half's rail shortened to leave it.
             const string rail = "Balcony_Cross_Straight";
             for (int i = 0; i < WatchtowerCells; ++i)
             {
@@ -1916,7 +2022,7 @@ namespace MultiplayerARPG.Demo.EditorTools
                 DemoVillageBuilder.Place(rail, t, new Vector3(half - 1f, kerb, p), 270f);
                 DemoVillageBuilder.Place(rail, t, new Vector3(-half + 1f, kerb, p), 90f);
             }
-            const float gap = 1f;
+            const float gap = RailGap;
             float railLength = half - gap * 0.5f;
             foreach (float side in new[] { -1f, 1f })
             {
@@ -1945,35 +2051,45 @@ namespace MultiplayerARPG.Demo.EditorTools
             // The ladder, up the face that looks onto the green. Two sections end to end,
             // stretched so the upper one stands proud of the deck by a rung or two.
             float ladderZ = -(half + WallProud + LadderHalfDepth + 0.02f);
-            float ladderTop = kerb + 0.3f;
-            float stretch = ladderTop / (2f * LadderHeight);
+            float stretch = WatchtowerLadderStretch;
             for (int section = 0; section < 2; ++section)
             {
                 GameObject ladder = Prop("Ladder", t, new Vector3(0f, section * LadderHeight * stretch, ladderZ), 0f);
                 if (ladder != null)
-                    ladder.transform.localScale = new Vector3(1f, stretch, 1f);
+                    ladder.transform.localScale = new Vector3(LadderWidth, stretch, 1f);
             }
 
             // The climb. The line the character is held to runs just in front of the
             // rungs, so that a capsule pressed against it clears the ladder's own
             // collision instead of being pushed out of it every frame. Its bottom is a
-            // little off the ground and its top a little above the kerb: the character
-            // has to be carried past an end to leave, and the ground would stop them
-            // going below a bottom set on it, as the kerb would stop them stepping onto
-            // the deck from a top set level with it.
+            // little off the ground: the character has to be carried past an end to
+            // leave, and the ground would stop them going below a bottom set on it. Its
+            // top is a metre down the wall (TopHang), where the hands hold the top rung;
+            // the pull-up from there onto the deck is the exit clip's.
             var rig = new GameObject("LadderRig");
             rig.transform.SetParent(t, false);
             var climb = rig.AddComponent<Ladder>();
             float lineZ = ladderZ - LadderHalfDepth - 0.03f;
             climb.bottomTransform = Anchor(rig.transform, "Bottom", new Vector3(0f, 0.12f, lineZ));
-            climb.topTransform = Anchor(rig.transform, "Top", new Vector3(0f, kerb + 0.1f, lineZ));
+            climb.topTransform = Anchor(rig.transform, "Top", new Vector3(0f, deckSurface - TopHang, lineZ));
             // Getting off at the bottom is a step back onto the ground where they hang,
             // which is where the step-off clip plays; at the top it is a pull up onto the
             // boards, well in from the edge.
             climb.bottomExitTransform = Anchor(rig.transform, "BottomExit", new Vector3(0f, 0f, lineZ - 0.3f));
             climb.topExitTransform = Anchor(rig.transform, "TopExit", new Vector3(0f, deckSurface, -half + 0.8f));
             climb.yAngleOffsets = yaw + 180f;
-            rig.AddComponent<MultiplayerARPG.Demo.DemoLadderExit>();
+            // Leaving at the ends is the climber's ladder component's job (EasedCharacterLadderComponent);
+            // the ladder needs nothing for it.
+
+            // The rungs, for hands and feet to hold (LadderLimbIK): each section's nine,
+            // as distances up the climb line from its bottom anchor. The line runs just in
+            // front of the rails, so the rung centres sit behind it by the rails' half
+            // depth, that clearance, and the rungs' own offset in the model.
+            var rungs = rig.AddComponent<MultiplayerARPG.LadderRungs>();
+            rungs.rungs = WatchtowerRungs(climb.bottomTransform.localPosition.y);
+            rungs.depth = LadderHalfDepth + 0.03f + RungCentreZ;
+            rungs.radius = RungRadius;
+            rungs.halfWidth = RungHalfWidth * LadderWidth;
 
             // Where you can get on: a body's worth of ground at the foot, and the strip of
             // deck inside the gap in the rail. Neither reaches the ladder itself, so a
@@ -1981,7 +2097,7 @@ namespace MultiplayerARPG.Demo.EditorTools
             Entrance(rig.transform, climb, LadderEntranceType.Bottom,
                 new Vector3(0f, 0.9f, lineZ - 0.7f), new Vector3(1.6f, 1.8f, 1.4f));
             Entrance(rig.transform, climb, LadderEntranceType.Top,
-                new Vector3(0f, deckSurface + 0.9f, -half + 0.7f), new Vector3(1.2f, 1.8f, 1.4f));
+                new Vector3(0f, deckSurface + 0.9f, -half + 0.7f), new Vector3(RailGap, 1.8f, 1.4f));
 
             MarkStatic(tower);
         }
@@ -1992,6 +2108,23 @@ namespace MultiplayerARPG.Demo.EditorTools
             DemoVillageBuilder.Place(slit ? "Wall_UnevenBrick_Window_Thin_Round" : "Wall_UnevenBrick_Straight", parent, position, yaw);
             if (slit)
                 DemoVillageBuilder.Place("Window_Thin_Round1", parent, position, yaw);
+        }
+
+        /// <summary>
+        /// The watchtower ladder's rung centres as distances up the climb line from its
+        /// bottom anchor, which stands this high above the tower's ground. Two sections,
+        /// each stretched, stacked end to end.
+        /// </summary>
+        public static float[] WatchtowerRungs(float bottomAnchorHeight)
+        {
+            float stretch = WatchtowerLadderStretch;
+            var along = new float[2 * RungsPerSection];
+            for (int section = 0; section < 2; ++section)
+            {
+                for (int n = 0; n < RungsPerSection; ++n)
+                    along[section * RungsPerSection + n] = (section * LadderHeight + RungFirst + RungSpacing * n) * stretch - bottomAnchorHeight;
+            }
+            return along;
         }
 
         private static Transform Anchor(Transform parent, string name, Vector3 localPosition)
@@ -2304,9 +2437,9 @@ namespace MultiplayerARPG.Demo.EditorTools
             light.type = LightType.Point;
             light.color = new Color(1f, 0.96f, 0.9f);
             light.range = big ? 9f : 7f;
-            var fill = daylight.AddComponent<MultiplayerARPG.Demo.DemoTorch>();
+            var fill = daylight.AddComponent<MultiplayerARPG.TimeOfDayLight>();
             fill.lamp = light;
-            fill.schedule = MultiplayerARPG.Demo.DemoTorch.Schedule.Day;
+            fill.schedule = MultiplayerARPG.TimeOfDayLight.Schedule.Day;
             fill.intensity = houseIndex == BankHouseIndex ? 2.4f : 1.8f;
             fill.flicker = 0f;
             fill.sway = 0f;
@@ -2320,8 +2453,8 @@ namespace MultiplayerARPG.Demo.EditorTools
             // stood at the very end of it and was nearly dark however bright the torch.
             foreach (GameObject torch in torches)
             {
-                MultiplayerARPG.Demo.DemoTorch flame =
-                    Kindle(torch, TorchFlame, DemoFlameBuilder.TorchFlamePath, MultiplayerARPG.Demo.DemoTorch.Schedule.Night);
+                MultiplayerARPG.TimeOfDayLight flame =
+                    Kindle(torch, TorchFlame, DemoFlameBuilder.TorchFlamePath, MultiplayerARPG.TimeOfDayLight.Schedule.Night);
                 if (flame == null)
                     continue;
                 flame.intensity = houseIndex == BankHouseIndex ? 2.6f : 2.2f;
@@ -2522,7 +2655,7 @@ namespace MultiplayerARPG.Demo.EditorTools
 
             // The same fire as the village's, on the same hours: the flame, its light
             // and its smoke all come with the prefab.
-            Kindle(firepit, BrazierFlame, DemoFlameBuilder.CampfireFlamePath, MultiplayerARPG.Demo.DemoTorch.Schedule.Night);
+            Kindle(firepit, BrazierFlame, DemoFlameBuilder.CampfireFlamePath, MultiplayerARPG.TimeOfDayLight.Schedule.Night);
             Scatter(root.transform, "Rock_Medium_1", 6, 2.2f, 0.35f);
 
             MarkStatic(root);
@@ -2714,243 +2847,622 @@ namespace MultiplayerARPG.Demo.EditorTools
         {
             // No tree patches here. Every tree on the island is a harvestable now, and
             // they are stood where the island wants its forest rather than in patches of
-            // their own — see BuildTreeNodes.
+            // their own — see GatherTreeSpots.
             //
             // No boulder patches either. Every boulder-sized rock on the island is a node,
-            // scattered wherever the loose rock falls - see BuildBoulderNodes.
+            // scattered wherever the loose rock falls - see GatherBoulderSpots.
             // Mushrooms under the trees, which is where the terrain paints them too, so
             // the ones you can pick sit among the ones that are only scenery.
             new HarvestPatch { Node = "Mushroom", Centre = new Vector2(-10f, 30f), Radius = 14f, Least = 4, Most = 6, MaxSlope = 24f, Spacing = 3f },
             new HarvestPatch { Node = "Mushroom", Centre = new Vector2(30f, -14f), Radius = 14f, Least = 4, Most = 6, MaxSlope = 24f, Spacing = 3f },
+            // Iron (2026-09-25), in the high ground south of the village and well away from
+            // it: the saddle between the southern wolves and the crypt, and the slope below
+            // the crypt at the edge of the marauders' hills. Each some twenty metres from a
+            // spawn, so better gear is a trip with some danger in it. Both were picked for
+            // ground a node can stand on - more than half of each circle under 26 degrees
+            // and clear of settled ground - measured 2026-09-25.
+            new HarvestPatch { Node = "IronVein", Centre = new Vector2(-20f, -34f), Radius = 10f, Least = 3, Most = 5, MaxSlope = 26f, Spacing = 4f },
+            new HarvestPatch { Node = "IronVein", Centre = new Vector2(-4f, -56f), Radius = 10f, Least = 3, Most = 5, MaxSlope = 26f, Spacing = 4f },
         };
+
+        /// <summary>The root every resource node's spawn area lives under.</summary>
+        private const string HarvestableRootName = "Harvestables";
+
+        /// <summary>
+        /// Rebuilds the harvestable spawn areas in DemoMap, and nothing else.
+        ///
+        /// The spots come from the same seeded rules a regenerate uses - the wood from
+        /// <see cref="DemoIslandBuilder.PlaceTrees"/>, the stone from the rock scatter walked
+        /// without placing a rock - so this lays down the Harvestables root a regenerate
+        /// would, without taking the rest of the island with it. Run it after Build
+        /// Harvestables changes a node's size or detection radius, since which spots can
+        /// stand together is worked out from those.
+        ///
+        /// No navmesh rebake: an area is an empty GameObject, and its nodes come and go at
+        /// runtime.
+        /// </summary>
+        [MenuItem("Open MMORPG/Demo/Rebuild Harvestable Nodes (writes DemoMap)")]
+        public static void RebuildHarvestableNodes()
+        {
+            if (!EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo())
+                return;
+            Scene scene = EditorSceneManager.OpenScene(ScenePath, OpenSceneMode.Single);
+            GameObject old = FindRoot(scene, HarvestableRootName);
+            int place = old != null ? old.transform.GetSiblingIndex() : -1;
+            if (old != null)
+                Object.DestroyImmediate(old);
+
+            System.Collections.Generic.List<Vector3> boulders = PlanBoulders();
+            int buried = DropSpotsInScenery(scene, boulders);
+            if (buried > 0)
+                Debug.Log($"[{nameof(DemoSceneBuilder)}] Dropped {buried} boulder spot(s) that fell on rock already in the scene.");
+            BuildHarvestNodes(scene, boulders);
+            // Back where the old root stood in the hierarchy, so the scene file changes by
+            // what changed and not by a root moving to the bottom.
+            if (place >= 0)
+                FindRoot(scene, HarvestableRootName).transform.SetSiblingIndex(place);
+
+            EditorSceneManager.MarkSceneDirty(scene);
+            EditorSceneManager.SaveScene(scene);
+            Debug.Log($"[{nameof(DemoSceneBuilder)}] Rebuilt the harvestable nodes in {ScenePath}. " +
+                      "A map server running from builds/ needs Build Map Server before it has them.");
+        }
 
         /// <summary>
         /// Sows the harvestable resources.
         ///
         /// These are spawn areas rather than nodes placed by hand, because a resource the
         /// player takes has to come back: the area holds the count, and puts another node
-        /// down after the delay on the entity. It also grounds and spaces them itself, so
-        /// the patches below only say roughly where the wood and the stone are.
+        /// down after the delay on the entity. The spots are baked in here - the trees where
+        /// DemoIslandBuilder grows the wood, the stone where the scatter would have stood a
+        /// boulder - so each area stands its nodes where the island wants them.
+        ///
+        /// Every spot is one its node can stand on beside all the others, and every area is
+        /// a <see cref="FreeSpotHarvestableSpawnArea"/>, which only ever sends a node to a spot
+        /// that is free. Between them, no area holds a node it has nowhere to put - which the
+        /// kit would retry every five seconds for the rest of the session, with two warnings
+        /// each time. See <see cref="ThinNodeSpots"/>.
         /// </summary>
         private static void BuildHarvestNodes(Scene scene, System.Collections.Generic.List<Vector3> boulders)
         {
-            GameObject root = Root(scene, "Harvestables");
-            BuildTreeNodes(root.transform);
-            BuildBoulderNodes(root.transform, boulders);
-            foreach (HarvestPatch patch in HarvestPatches)
+            // Taken before the root is made, though nothing under it has a collider anyway.
+            System.Collections.Generic.List<Bounds> obstacles = SceneObstacles(scene);
+            GameObject root = Root(scene, HarvestableRootName);
+
+            var spots = new System.Collections.Generic.List<NodeSpot>();
+            GatherTreeSpots(spots);
+            GatherBoulderSpots(spots, boulders);
+            System.Collections.Generic.List<NodeSpot> standing = ThinNodeSpots(spots, obstacles);
+
+            var wood = new System.Collections.Generic.List<NodeSpot>();
+            var stone = new System.Collections.Generic.List<NodeSpot>();
+            foreach (NodeSpot spot in standing)
             {
-                string[] models = DemoHarvestBuilder.ModelsFor(patch.Node);
-                var kinds = new System.Collections.Generic.List<HarvestableEntity>();
-                foreach (string model in models)
-                {
-                    HarvestableEntity built = DemoHarvestBuilder.Entity(model);
-                    if (built != null)
-                        kinds.Add(built);
-                }
-                if (kinds.Count == 0)
-                {
-                    Debug.LogWarning($"[{nameof(DemoSceneBuilder)}] No harvestable entities for \"{patch.Node}\". Run Build Harvestables first.");
-                    continue;
-                }
-
-                var area = new GameObject($"{patch.Node}Patch");
-                area.transform.SetParent(root.transform, false);
-                area.transform.position = new Vector3(
-                    patch.Centre.x,
-                    DemoIslandBuilder.HeightAt(patch.Centre.x, patch.Centre.y) + 1f,
-                    patch.Centre.y);
-
-                var spawner = area.AddComponent<HarvestableSpawnArea>();
-                var serialized = new SerializedObject(spawner);
-                // A patch is one kind of thing in several shapes, so the models go in the
-                // mixture list rather than one being picked as the prefab. Boulders that
-                // are all the same rock read as a row of copies.
-                serialized.FindProperty("prefab").objectReferenceValue = null;
-                SerializedProperty mixture = serialized.FindProperty("spawningPrefabs");
-                mixture.arraySize = kinds.Count;
-                for (int i = 0; i < kinds.Count; ++i)
-                {
-                    SerializedProperty entry = mixture.GetArrayElementAtIndex(i);
-                    entry.FindPropertyRelative("prefab").objectReferenceValue = kinds[i];
-                    entry.FindPropertyRelative("minLevel").intValue = 1;
-                    entry.FindPropertyRelative("maxLevel").intValue = 1;
-                    // Shared out between the shapes, so the patch holds the number it is
-                    // meant to hold however many models it is drawing from.
-                    int share = Mathf.Max(1, Mathf.RoundToInt(patch.Least / (float)kinds.Count));
-                    int most = Mathf.Max(share, Mathf.RoundToInt(patch.Most / (float)kinds.Count));
-                    entry.FindPropertyRelative("minAmount").intValue = share;
-                    entry.FindPropertyRelative("maxAmount").intValue = most + 1;
-                }
-                serialized.FindProperty("randomRadius").floatValue = patch.Radius;
-                serialized.FindProperty("minAmount").intValue = patch.Least;
-                serialized.FindProperty("maxAmount").intValue = patch.Most;
-                serialized.FindProperty("minLevel").intValue = 1;
-                serialized.FindProperty("maxLevel").intValue = 1;
-                // Pick from the baked spots at random rather than walking them in order,
-                // or the same nodes come back in the same sequence every respawn.
-                serialized.FindProperty("randomPositionMode").enumValueIndex = (int)GameAreaRandomPositionMode.FullyRandom;
-                BakeNodeSpots(serialized, area.transform, patch);
-                serialized.ApplyModifiedPropertiesWithoutUndo();
+                if (spot.Rank == StoneRank)
+                    stone.Add(spot);
+                else
+                    wood.Add(spot);
             }
+            int trees = BuildNodeAreas(root.transform, "Trees", wood);
+            int rocks = BuildNodeAreas(root.transform, "Boulders", stone);
+            Debug.Log($"[{nameof(DemoSceneBuilder)}] Stood up {trees} harvestable trees and {rocks} boulders. " +
+                      $"{spots.Count - standing.Count} more spots were too close to another node, or to something " +
+                      "in the scene, for a node to spawn there.");
+
+            var rooms = new System.Collections.Generic.List<NodeRoom>();
+            foreach (NodeSpot spot in standing)
+                rooms.Add(NodeRoom.Of(spot.Node, spot.Position));
+            foreach (HarvestPatch patch in HarvestPatches)
+                BuildPatch(root.transform, patch, rooms, obstacles);
+        }
+
+        /// <summary>A spot the island wants a node on, and which node.</summary>
+        private struct NodeSpot
+        {
+            /// <summary>The area it belongs to, and that area's name: the tree species or the rock model.</summary>
+            public string Kind;
+            public HarvestableEntity Node;
+            public Vector3 Position;
+            /// <summary>Which pass decides it. Lower goes first and keeps its place.</summary>
+            public int Rank;
         }
 
         /// <summary>
-        /// Stands up the island's forest as harvestable nodes.
+        /// The order spots are decided in when two cannot both stand. The trees scattered
+        /// singly on purpose go first, being few and placed with care; then the stone, which
+        /// is scarcer than timber; then the wood, which is plentiful and gives way.
+        /// </summary>
+        private const int AccentRank = 0;
+        private const int StoneRank = 1;
+        private const int WoodRank = 2;
+
+        /// <summary>
+        /// The trees the island wants, as spots for nodes.
         ///
-        /// The trees are no longer drawn by the terrain — a terrain tree is a record in
+        /// The trees are not drawn by the terrain any more — a terrain tree is a record in
         /// the TerrainData with no GameObject, so it can never be harvested — and are
         /// spawned as entities instead. Where they stand is still decided by
         /// <see cref="DemoIslandBuilder.PlaceTrees"/>, so the wood keeps the shape it had:
         /// the same stands, the same sparse red accents, the same scattered dead snags.
-        ///
-        /// One area per species, rather than one area spawning a mixture. An area picks
-        /// its prefab and its position independently, so a single mixed area would put
-        /// pines where the twisted trees were meant to be and scatter the dead ones
-        /// through the middle of a stand. Giving each species its own area with its own
-        /// spots keeps every tree the kind that was placed there.
         /// </summary>
-        private static void BuildTreeNodes(Transform root)
+        private static void GatherTreeSpots(System.Collections.Generic.List<NodeSpot> spots)
         {
-            var bySpecies = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<Vector2>>();
+            var nodes = new System.Collections.Generic.Dictionary<string, HarvestableEntity>();
             foreach (DemoIslandBuilder.TreePlacement placement in DemoIslandBuilder.PlaceTrees())
             {
                 if (!placement.Canopy)
                     continue;
-                if (!bySpecies.TryGetValue(placement.Prefab, out System.Collections.Generic.List<Vector2> spots))
-                    bySpecies[placement.Prefab] = spots = new System.Collections.Generic.List<Vector2>();
-                spots.Add(placement.Spot);
-            }
-
-            var trees = new GameObject("Trees");
-            trees.transform.SetParent(root, false);
-            int total = 0;
-            foreach (System.Collections.Generic.KeyValuePair<string, System.Collections.Generic.List<Vector2>> species in bySpecies)
-            {
-                HarvestableEntity node = DemoHarvestBuilder.Entity(species.Key);
+                if (!nodes.TryGetValue(placement.Prefab, out HarvestableEntity node))
+                {
+                    node = DemoHarvestBuilder.Entity(placement.Prefab);
+                    nodes[placement.Prefab] = node;
+                    if (node == null)
+                        Debug.LogWarning($"[{nameof(DemoSceneBuilder)}] No harvestable entity for \"{placement.Prefab}\". Run Build Harvestables first.");
+                }
                 if (node == null)
-                {
-                    Debug.LogWarning($"[{nameof(DemoSceneBuilder)}] No harvestable entity for \"{species.Key}\". Run Build Harvestables first.");
                     continue;
-                }
-
-                Vector2 middle = Vector2.zero;
-                foreach (Vector2 spot in species.Value)
-                    middle += spot;
-                middle /= species.Value.Count;
-                float reach = 0f;
-                foreach (Vector2 spot in species.Value)
-                    reach = Mathf.Max(reach, Vector2.Distance(spot, middle));
-
-                var area = new GameObject(species.Key);
-                area.transform.SetParent(trees.transform, false);
-                area.transform.position = new Vector3(middle.x, DemoIslandBuilder.HeightAt(middle.x, middle.y), middle.y);
-
-                var spawner = area.AddComponent<HarvestableSpawnArea>();
-                var serialized = new SerializedObject(spawner);
-                serialized.FindProperty("prefab").objectReferenceValue = node;
-                serialized.FindProperty("randomRadius").floatValue = reach;
-                // Every spot is filled, and each is used once: the count matches the spots
-                // and they are taken in order, so the forest that was designed is the
-                // forest that stands rather than a random draw from it.
-                serialized.FindProperty("minAmount").intValue = species.Value.Count;
-                serialized.FindProperty("maxAmount").intValue = species.Value.Count;
-                serialized.FindProperty("minLevel").intValue = 1;
-                serialized.FindProperty("maxLevel").intValue = 1;
-                serialized.FindProperty("randomPositionMode").enumValueIndex = (int)GameAreaRandomPositionMode.ByOrder;
-
-                SerializedProperty baked = serialized.FindProperty("randomedPosition3Ds");
-                baked.arraySize = species.Value.Count;
-                for (int i = 0; i < species.Value.Count; ++i)
+                spots.Add(new NodeSpot
                 {
-                    Vector2 spot = species.Value[i];
-                    var world = new Vector3(spot.x, DemoIslandBuilder.HeightAt(spot.x, spot.y), spot.y);
-                    baked.GetArrayElementAtIndex(i).vector3Value = area.transform.InverseTransformPoint(world);
-                }
-                serialized.FindProperty("randomPositionAmount").intValue = species.Value.Count;
-                serialized.ApplyModifiedPropertiesWithoutUndo();
-                total += species.Value.Count;
+                    Kind = placement.Prefab,
+                    Node = node,
+                    Position = GroundSpot(placement.Spot.x, placement.Spot.y),
+                    // A band that keeps its trees apart placed each one deliberately.
+                    Rank = placement.Spacing > 0f ? AccentRank : WoodRank,
+                });
             }
-            Debug.Log($"[{nameof(DemoSceneBuilder)}] Stood up {total} harvestable trees across {bySpecies.Count} species.");
         }
 
         /// <summary>
-        /// Stands the island's loose boulders up as nodes.
+        /// The island's loose boulders, as spots for nodes.
         ///
         /// These come from the scatter rather than from patches of their own, so stone is
         /// found where stone would be — along the rocky ground and under the outcrops —
         /// instead of in two quarries somebody drew on the map. The spots arrive already
-        /// grounded and already filtered by the scatter's own height and slope rules.
+        /// filtered by the scatter's own height and slope rules.
         ///
-        /// The three rock models are shared out between areas the same way the trees are,
-        /// one area to a model, so which rock stands where is decided here and not redrawn
-        /// every time the area respawns one.
+        /// The three rock models are dealt out in turn rather than randomed, so each model
+        /// gets its share and no one of them happens to take nearly all of them; like the
+        /// trees, each model then gets an area of its own, so which rock stands where is
+        /// decided here and not redrawn every time the area respawns one.
         /// </summary>
-        private static void BuildBoulderNodes(Transform root, System.Collections.Generic.List<Vector3> boulders)
+        private static void GatherBoulderSpots(System.Collections.Generic.List<NodeSpot> spots, System.Collections.Generic.List<Vector3> boulders)
         {
             string[] models = DemoHarvestBuilder.ModelsFor("Boulder");
-            if (models.Length == 0 || boulders.Count == 0)
+            if (models.Length == 0)
                 return;
-
-            var stone = new GameObject("Boulders");
-            stone.transform.SetParent(root, false);
-
-            // Dealt out in turn rather than randomed, so each model gets its share and no
-            // one of them happens to take nearly all of them.
-            var byModel = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<Vector3>>();
+            var nodes = new HarvestableEntity[models.Length];
+            for (int i = 0; i < models.Length; ++i)
+            {
+                nodes[i] = DemoHarvestBuilder.Entity(models[i]);
+                if (nodes[i] == null)
+                    Debug.LogWarning($"[{nameof(DemoSceneBuilder)}] No harvestable entity for \"{models[i]}\". Run Build Harvestables first.");
+            }
             for (int i = 0; i < boulders.Count; ++i)
             {
-                string model = models[i % models.Length];
-                if (!byModel.TryGetValue(model, out System.Collections.Generic.List<Vector3> spots))
-                    byModel[model] = spots = new System.Collections.Generic.List<Vector3>();
-                spots.Add(boulders[i]);
+                int model = i % models.Length;
+                if (nodes[model] == null)
+                    continue;
+                spots.Add(new NodeSpot
+                {
+                    Kind = models[model],
+                    Node = nodes[model],
+                    Position = GroundSpot(boulders[i].x, boulders[i].z),
+                    Rank = StoneRank,
+                });
+            }
+        }
+
+        /// <summary>
+        /// A node's spot: on the ground, and on the tenth-of-a-metre grid.
+        ///
+        /// NodeVariety sizes a node by hashing where it stands, rounded to a tenth of a
+        /// metre, and the builder needs that size to know how much room the node takes. A
+        /// spot on the grid is five centimetres from where the rounding could go either
+        /// way, so the size worked out here is the size the node spawns at - on the server,
+        /// and on every client. Nobody can see five centimetres of a tree.
+        /// </summary>
+        private static Vector3 GroundSpot(float x, float z)
+        {
+            x = Mathf.Round(x * 10f) / 10f;
+            z = Mathf.Round(z * 10f) / 10f;
+            return new Vector3(x, DemoIslandBuilder.HeightAt(x, z), z);
+        }
+
+        /// <summary>
+        /// The room a node takes, in the kit's own terms: the sphere it checks before it will
+        /// spawn, and the box the next node's sphere finds once it is standing.
+        ///
+        /// A box, not the capsule the node is built with. When a damageable entity starts,
+        /// the kit gives it a trigger hitbox the size of its colliders' world bounds, on the
+        /// same layer and square to the world (DamageableEntity.CreateHitBoxes), and the
+        /// spawn test counts triggers - so a node reaches out to its capsule's bounding box,
+        /// 41% further than the capsule at the corners. Measured on 2026-09-24: a mushroom's
+        /// hitbox kept a boulder out 2.45m from the mushroom's foot.
+        /// </summary>
+        private struct NodeRoom
+        {
+            public Vector3 Foot;
+            /// <summary>The node's detection radius, around its foot.</summary>
+            public float Reach;
+            public Bounds Box;
+
+            public static NodeRoom Of(HarvestableEntity node, Vector3 foot)
+            {
+                var room = new NodeRoom { Foot = foot, Reach = node.ColliderDetectionRadius, Box = new Bounds(foot, Vector3.zero) };
+                // DemoHarvestBuilder stands it on the root, upright and centred, so its bounds
+                // are the same whichever way the area turns it.
+                var capsule = node.GetComponent<CapsuleCollider>();
+                if (capsule == null)
+                    return room;
+                // NodeVariety sizes the node in Start, a frame after it spawns: a neighbour
+                // spawning in the same frame finds its capsule at the prefab's size, one
+                // spawning later finds the hitbox at the size it grew to. The larger of the
+                // two holds both.
+                var variety = node.GetComponent<NodeVariety>();
+                float size = variety != null ? Mathf.Max(1f, variety.SizeAt(foot)) : 1f;
+                float height = Mathf.Max(capsule.height, capsule.radius * 2f);
+                room.Box = new Bounds(foot + capsule.center * size,
+                                      new Vector3(capsule.radius * 2f, height, capsule.radius * 2f) * size);
+                return room;
+            }
+        }
+
+        /// <summary>Clears the kit's test by this much, so a spot right on the edge does not pass or fail on rounding.</summary>
+        private const float NodeRoomMargin = 0.05f;
+
+        /// <summary>
+        /// Whether a node spawning in room `a` is refused because of a node standing in room
+        /// `b`. The kit's own test (HarvestableSpawnArea.IsOverlapSomethingNearby): a sphere at
+        /// `a`'s foot as wide as its detection radius, against what `b` has standing.
+        /// </summary>
+        private static bool Refuses(NodeRoom a, NodeRoom b)
+        {
+            return Crowds(a, b.Box);
+        }
+
+        /// <summary>Whether a node spawning in room `a` would find something inside `box`.</summary>
+        private static bool Crowds(NodeRoom a, Bounds box)
+        {
+            float reach = a.Reach + NodeRoomMargin;
+            return box.SqrDistance(a.Foot) < reach * reach;
+        }
+
+        /// <summary>
+        /// What in the scene a node will not spawn beside: every collider already on one of
+        /// the layers the kit refuses, and every collider on an entity's root - the shrine,
+        /// the villagers, the horse. The kit moves an entity's root onto its own layer (Npc,
+        /// Monster, Vehicle...) only once the game is running, so in the editor they sit on
+        /// Default and pass for scenery; the resurrection shrine stood inside a tree's
+        /// detection radius and held that tree back for good.
+        ///
+        /// As world bounds, which hold a collider however it is turned: a spot clear of the
+        /// box is clear of what is in it. Things that walk about are not here and cannot be;
+        /// FreeSpotHarvestableSpawnArea waits them out.
+        /// </summary>
+        private static System.Collections.Generic.List<Bounds> SceneObstacles(Scene scene)
+        {
+            var obstacles = new System.Collections.Generic.List<Bounds>();
+            int blocking = BlockingLayers();
+            foreach (GameObject root in scene.GetRootGameObjects())
+            {
+                foreach (Collider collider in root.GetComponentsInChildren<Collider>(true))
+                {
+                    // A switched-off collider reports an empty box at the world's origin,
+                    // which would be an obstacle in the middle of the island.
+                    Bounds bounds = collider.bounds;
+                    if (bounds.size == Vector3.zero)
+                        continue;
+                    if ((blocking & (1 << collider.gameObject.layer)) != 0 ||
+                        collider.GetComponent<BaseGameEntity>() != null)
+                        obstacles.Add(bounds);
+                }
+            }
+            return obstacles;
+        }
+
+        /// <summary>The layers HarvestableSpawnArea.IsOverlapSomethingNearby will not stand a node over, from the demo's GameInstance.</summary>
+        private static int BlockingLayers()
+        {
+            GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(GameInstancePath);
+            GameInstance game = prefab != null ? prefab.GetComponent<GameInstance>() : null;
+            if (game == null)
+            {
+                Debug.LogError($"[{nameof(DemoSceneBuilder)}] No GameInstance at {GameInstancePath} to read the entity layers from.");
+                return 0;
+            }
+            return game.playerLayer.Mask | game.playingLayer.Mask | game.monsterLayer.Mask |
+                   game.npcLayer.Mask | game.vehicleLayer.Mask | game.itemDropLayer.Mask |
+                   game.buildingLayer.Mask | game.harvestableLayer.Mask;
+        }
+
+        private const string GameInstancePath = "Assets/OpenMMORPG/Demo/Prefabs/GameInstance.prefab";
+
+        /// <summary>Whether a node in this room would be refused by something already in the scene.</summary>
+        private static bool Obstructed(NodeRoom room, System.Collections.Generic.List<Bounds> obstacles)
+        {
+            foreach (Bounds obstacle in obstacles)
+            {
+                if (Crowds(room, obstacle))
+                    return true;
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Whether two nodes cannot both stand. Either can be the one to spawn second - the
+        /// first time the areas fill, or after the other has been felled and comes back - so
+        /// the test is run both ways round.
+        /// </summary>
+        private static bool Clash(NodeRoom a, NodeRoom b)
+        {
+            return Refuses(a, b) || Refuses(b, a);
+        }
+
+        /// <summary>Whether any of `kinds` standing at `foot` would clash with any of `taken`, or be refused by an obstacle.</summary>
+        private static bool ClashesWithAny(System.Collections.Generic.List<HarvestableEntity> kinds, Vector3 foot,
+            System.Collections.Generic.List<NodeRoom> taken, System.Collections.Generic.List<Bounds> obstacles)
+        {
+            foreach (HarvestableEntity kind in kinds)
+            {
+                NodeRoom room = NodeRoom.Of(kind, foot);
+                if (Obstructed(room, obstacles))
+                    return true;
+                foreach (NodeRoom other in taken)
+                {
+                    if (Clash(room, other))
+                        return true;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Keeps the spots whose nodes can all stand at once, and drops the rest.
+        ///
+        /// The wood comes from DemoIslandBuilder.PlaceTrees, which lets the trees of a stand
+        /// touch - the forest was designed as terrain trees, which may - and the stone from
+        /// the scatter, which knows nothing of trees. But a node will not spawn within its
+        /// detection radius of another (3m for a tree), and an area whose count matches its
+        /// spots has nowhere else to put a node that is refused: it was held pending for the
+        /// whole session and retried every five seconds, two warnings a time. On 2026-09-24
+        /// that was about 140 of the island's 370 nodes, and 343,000 warnings in Editor.log.
+        /// A spot is dropped too if something already in the scene refuses it (see
+        /// SceneObstacles).
+        ///
+        /// Decided a rank at a time (see AccentRank), so the few trees placed with care keep
+        /// their places and the plentiful wood gives way around them. Within a rank the spot
+        /// crowding the fewest of those still undecided goes first, which keeps more of a
+        /// dense stand than taking them in order - 126 of the wood's 275 trees against 120.
+        ///
+        /// Returns the kept spots in the order they came in, so each area still takes its
+        /// spots in the order they were placed.
+        /// </summary>
+        private static System.Collections.Generic.List<NodeSpot> ThinNodeSpots(System.Collections.Generic.List<NodeSpot> spots,
+            System.Collections.Generic.List<Bounds> obstacles)
+        {
+            int count = spots.Count;
+            var rooms = new NodeRoom[count];
+            for (int i = 0; i < count; ++i)
+                rooms[i] = NodeRoom.Of(spots[i].Node, spots[i].Position);
+
+            var clashes = new System.Collections.Generic.List<int>[count];
+            for (int i = 0; i < count; ++i)
+                clashes[i] = new System.Collections.Generic.List<int>();
+            for (int i = 0; i < count; ++i)
+            {
+                for (int j = i + 1; j < count; ++j)
+                {
+                    if (!Clash(rooms[i], rooms[j]))
+                        continue;
+                    clashes[i].Add(j);
+                    clashes[j].Add(i);
+                }
             }
 
-            int total = 0;
-            foreach (System.Collections.Generic.KeyValuePair<string, System.Collections.Generic.List<Vector3>> group in byModel)
+            var open = new bool[count];
+            var kept = new bool[count];
+            // Something that is already standing refuses a spot whatever its rank.
+            for (int i = 0; i < count; ++i)
+                open[i] = !Obstructed(rooms[i], obstacles);
+            for (int rank = AccentRank; rank <= WoodRank; ++rank)
             {
-                HarvestableEntity node = DemoHarvestBuilder.Entity(group.Key);
-                if (node == null)
+                for (int best = Emptiest(spots, clashes, open, rank); best >= 0; best = Emptiest(spots, clashes, open, rank))
                 {
-                    Debug.LogWarning($"[{nameof(DemoSceneBuilder)}] No harvestable entity for \"{group.Key}\". Run Build Harvestables first.");
-                    continue;
+                    kept[best] = true;
+                    open[best] = false;
+                    foreach (int other in clashes[best])
+                        open[other] = false;
                 }
+            }
 
-                Vector3 middle = Vector3.zero;
-                foreach (Vector3 spot in group.Value)
-                    middle += spot;
-                middle /= group.Value.Count;
+            var standing = new System.Collections.Generic.List<NodeSpot>();
+            for (int i = 0; i < count; ++i)
+            {
+                if (kept[i])
+                    standing.Add(spots[i]);
+            }
+            return standing;
+        }
+
+        /// <summary>The undecided spot of a rank that crowds the fewest others still undecided in it, or -1 when none is left.</summary>
+        private static int Emptiest(System.Collections.Generic.List<NodeSpot> spots, System.Collections.Generic.List<int>[] clashes, bool[] open, int rank)
+        {
+            int best = -1;
+            int fewest = int.MaxValue;
+            for (int i = 0; i < spots.Count; ++i)
+            {
+                if (!open[i] || spots[i].Rank != rank)
+                    continue;
+                int crowded = 0;
+                foreach (int other in clashes[i])
+                {
+                    if (open[other] && spots[other].Rank == rank)
+                        ++crowded;
+                }
+                if (crowded < fewest)
+                {
+                    fewest = crowded;
+                    best = i;
+                }
+            }
+            return best;
+        }
+
+        /// <summary>
+        /// Stands one spawn area per kind of node - a tree species, a rock model - holding
+        /// exactly its spots, filled in order.
+        ///
+        /// One area per kind, rather than one area spawning a mixture. An area picks its
+        /// prefab and its position independently, so a single mixed area would put pines
+        /// where the twisted trees were meant to be and scatter the dead ones through the
+        /// middle of a stand. Giving each kind its own area with its own spots keeps every
+        /// tree the kind that was placed there.
+        /// </summary>
+        private static int BuildNodeAreas(Transform root, string groupName, System.Collections.Generic.List<NodeSpot> spots)
+        {
+            var kinds = new System.Collections.Generic.List<string>();
+            var byKind = new System.Collections.Generic.Dictionary<string, System.Collections.Generic.List<NodeSpot>>();
+            foreach (NodeSpot spot in spots)
+            {
+                if (!byKind.TryGetValue(spot.Kind, out System.Collections.Generic.List<NodeSpot> mine))
+                {
+                    byKind[spot.Kind] = mine = new System.Collections.Generic.List<NodeSpot>();
+                    kinds.Add(spot.Kind);
+                }
+                mine.Add(spot);
+            }
+
+            var group = new GameObject(groupName);
+            group.transform.SetParent(root, false);
+            int total = 0;
+            foreach (string kind in kinds)
+            {
+                System.Collections.Generic.List<NodeSpot> mine = byKind[kind];
+                Vector2 middle = Vector2.zero;
+                foreach (NodeSpot spot in mine)
+                    middle += new Vector2(spot.Position.x, spot.Position.z);
+                middle /= mine.Count;
                 float reach = 0f;
-                foreach (Vector3 spot in group.Value)
-                    reach = Mathf.Max(reach, Vector2.Distance(new Vector2(spot.x, spot.z), new Vector2(middle.x, middle.z)));
+                foreach (NodeSpot spot in mine)
+                    reach = Mathf.Max(reach, Vector2.Distance(new Vector2(spot.Position.x, spot.Position.z), middle));
 
-                var area = new GameObject(group.Key);
-                area.transform.SetParent(stone.transform, false);
-                area.transform.position = middle;
+                var area = new GameObject(kind);
+                area.transform.SetParent(group.transform, false);
+                area.transform.position = new Vector3(middle.x, DemoIslandBuilder.HeightAt(middle.x, middle.y), middle.y);
 
-                var spawner = area.AddComponent<HarvestableSpawnArea>();
+                var spawner = area.AddComponent<FreeSpotHarvestableSpawnArea>();
                 var serialized = new SerializedObject(spawner);
-                serialized.FindProperty("prefab").objectReferenceValue = node;
+                serialized.FindProperty("prefab").objectReferenceValue = mine[0].Node;
                 serialized.FindProperty("randomRadius").floatValue = reach;
-                serialized.FindProperty("minAmount").intValue = group.Value.Count;
-                serialized.FindProperty("maxAmount").intValue = group.Value.Count;
+                // Every spot is filled, and each is used once: the count matches the spots
+                // and they are taken in order, so the forest that was designed is the
+                // forest that stands rather than a random draw from it.
+                serialized.FindProperty("minAmount").intValue = mine.Count;
+                serialized.FindProperty("maxAmount").intValue = mine.Count;
                 serialized.FindProperty("minLevel").intValue = 1;
                 serialized.FindProperty("maxLevel").intValue = 1;
                 serialized.FindProperty("randomPositionMode").enumValueIndex = (int)GameAreaRandomPositionMode.ByOrder;
 
                 SerializedProperty baked = serialized.FindProperty("randomedPosition3Ds");
-                baked.arraySize = group.Value.Count;
-                for (int i = 0; i < group.Value.Count; ++i)
-                    baked.GetArrayElementAtIndex(i).vector3Value = area.transform.InverseTransformPoint(group.Value[i]);
-                serialized.FindProperty("randomPositionAmount").intValue = group.Value.Count;
+                baked.arraySize = mine.Count;
+                for (int i = 0; i < mine.Count; ++i)
+                    baked.GetArrayElementAtIndex(i).vector3Value = area.transform.InverseTransformPoint(mine[i].Position);
+                serialized.FindProperty("randomPositionAmount").intValue = mine.Count;
+                // Otherwise the kit's Bake Random Positions (All Areas) re-bakes the spots and undoes the thinning.
+                serialized.FindProperty("excludeFromAllAreaBaking").boolValue = true;
                 serialized.ApplyModifiedPropertiesWithoutUndo();
-                total += group.Value.Count;
+                total += mine.Count;
             }
-            Debug.Log($"[{nameof(DemoSceneBuilder)}] Stood up {total} harvestable boulders across {byModel.Count} kinds.");
+            return total;
         }
 
         /// <summary>
-        /// Works out where in a patch a node may actually stand, and bakes those spots
-        /// into the area.
+        /// Sows one patch: a kind of node in several shapes, over more spots than it ever
+        /// holds at once, so that a patch that has been picked does not come back exactly as
+        /// it was.
+        /// </summary>
+        private static void BuildPatch(Transform root, HarvestPatch patch, System.Collections.Generic.List<NodeRoom> standing,
+            System.Collections.Generic.List<Bounds> obstacles)
+        {
+            var kinds = new System.Collections.Generic.List<HarvestableEntity>();
+            foreach (string model in DemoHarvestBuilder.ModelsFor(patch.Node))
+            {
+                // By kind as well as model: the iron veins are built from the boulders' rocks.
+                HarvestableEntity built = DemoHarvestBuilder.Entity(patch.Node, model);
+                if (built != null)
+                    kinds.Add(built);
+            }
+            if (kinds.Count == 0)
+            {
+                Debug.LogWarning($"[{nameof(DemoSceneBuilder)}] No harvestable entities for \"{patch.Node}\". Run Build Harvestables first.");
+                return;
+            }
+
+            var area = new GameObject($"{patch.Node}Patch");
+            area.transform.SetParent(root, false);
+            area.transform.position = new Vector3(
+                patch.Centre.x,
+                DemoIslandBuilder.HeightAt(patch.Centre.x, patch.Centre.y) + 1f,
+                patch.Centre.y);
+
+            var spawner = area.AddComponent<FreeSpotHarvestableSpawnArea>();
+            var serialized = new SerializedObject(spawner);
+            int room = BakeNodeSpots(serialized, area.transform, patch, kinds, standing, obstacles);
+            if (room == 0)
+            {
+                Debug.LogWarning($"[{nameof(DemoSceneBuilder)}] {patch.Node} patch at {patch.Centre} has no spot a node can stand on; left out.");
+                Object.DestroyImmediate(area);
+                return;
+            }
+            // Never more at once than there are spots, or the patch holds a node it has
+            // nowhere to put.
+            int most = Mathf.Min(patch.Most, room);
+            int least = Mathf.Min(patch.Least, most);
+
+            // A patch is one kind of thing in several shapes, so the models go in the
+            // mixture list rather than one being picked as the prefab. Boulders that
+            // are all the same rock read as a row of copies.
+            serialized.FindProperty("prefab").objectReferenceValue = null;
+            SerializedProperty mixture = serialized.FindProperty("spawningPrefabs");
+            mixture.arraySize = kinds.Count;
+            // Shared out between the shapes, so the patch holds the number it is meant to
+            // hold however many models it is drawing from. With no `prefab` the kit spawns
+            // from this list alone (`GameSpawnArea.SpawnAll`) and the area's own min/max below
+            // are never read - so the least and most have to be split across the entries, the
+            // remainder going to the first shapes. Until 2026-09-29 each shape got
+            // `max(1, most / kinds)`: three iron shapes at most five was one each, so a vein
+            // patch always held exactly three; and a patch with fewer spots than shapes still
+            // got one of every shape, more nodes than it had room for. Now the total always
+            // lands between `least` and `most`, and `most` never exceeds the spots.
+            for (int i = 0; i < kinds.Count; ++i)
+            {
+                int kindLeast = least / kinds.Count + (i < least % kinds.Count ? 1 : 0);
+                int kindMost = most / kinds.Count + (i < most % kinds.Count ? 1 : 0);
+                SerializedProperty entry = mixture.GetArrayElementAtIndex(i);
+                entry.FindPropertyRelative("prefab").objectReferenceValue = kinds[i];
+                entry.FindPropertyRelative("minLevel").intValue = 1;
+                entry.FindPropertyRelative("maxLevel").intValue = 1;
+                entry.FindPropertyRelative("minAmount").intValue = kindLeast;
+                // Exclusive: a mixture entry draws Random.Range(min, max), where the area's
+                // own count draws up to max inclusive.
+                entry.FindPropertyRelative("maxAmount").intValue = kindMost + 1;
+            }
+            serialized.FindProperty("randomRadius").floatValue = patch.Radius;
+            serialized.FindProperty("minAmount").intValue = least;
+            serialized.FindProperty("maxAmount").intValue = most;
+            serialized.FindProperty("minLevel").intValue = 1;
+            serialized.FindProperty("maxLevel").intValue = 1;
+            // Pick from the baked spots at random rather than walking them in order,
+            // or the same nodes come back in the same sequence every respawn.
+            serialized.FindProperty("randomPositionMode").enumValueIndex = (int)GameAreaRandomPositionMode.FullyRandom;
+            // Otherwise the kit's Bake Random Positions (All Areas) re-bakes the spots with no slope or room check.
+            serialized.FindProperty("excludeFromAllAreaBaking").boolValue = true;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+        }
+
+        /// <summary>
+        /// Works out where in a patch a node may actually stand, bakes those spots into
+        /// the area, and says how many it found.
         ///
         /// A spawn area left to itself drops its nodes anywhere inside the circle that a
         /// ray finds ground, and some of these patches run up ground steep enough to
@@ -2958,11 +3470,18 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// answer: an area with baked positions uses those instead of randoming its own,
         /// so the slope test can be applied here, once, rather than every respawn.
         ///
+        /// A spot also has to leave room for the nodes already standing, both ways round
+        /// (see <see cref="Clash"/>). The patches lie under the trees, and a mushroom inside
+        /// a tree's detection radius would keep that tree from coming back once felled for
+        /// as long as nobody picked the mushroom.
+        ///
         /// The spots are stored in the area's own space, which is what the kit reads them
         /// back as, and they carry their exact ground height — a baked spot is used as
         /// given, with no second ground check.
         /// </summary>
-        private static void BakeNodeSpots(SerializedObject serialized, Transform area, HarvestPatch patch)
+        private static int BakeNodeSpots(SerializedObject serialized, Transform area, HarvestPatch patch,
+            System.Collections.Generic.List<HarvestableEntity> kinds, System.Collections.Generic.List<NodeRoom> standing,
+            System.Collections.Generic.List<Bounds> obstacles)
         {
             Random.State previous = Random.state;
             Random.InitState(HarvestSeed + Mathf.RoundToInt(patch.Centre.x * 31f + patch.Centre.y));
@@ -2971,6 +3490,7 @@ namespace MultiplayerARPG.Demo.EditorTools
             // has just been cleared does not come back in exactly the same places.
             int wanted = patch.Most * 3;
             var spots = new System.Collections.Generic.List<Vector3>();
+            var taken = new System.Collections.Generic.List<NodeRoom>(standing);
             for (int attempt = 0; attempt < wanted * 80 && spots.Count < wanted; ++attempt)
             {
                 float angle = Random.Range(0f, Mathf.PI * 2f);
@@ -2982,13 +3502,16 @@ namespace MultiplayerARPG.Demo.EditorTools
                     continue;
                 if (InsideClearing(x, z) || InsideBuilding(x, z))
                     continue;
-                var here = new Vector3(x, DemoIslandBuilder.HeightAt(x, z), z);
+                Vector3 here = GroundSpot(x, z);
                 bool crowded = false;
                 foreach (Vector3 spot in spots)
-                    crowded |= Vector2.Distance(new Vector2(spot.x, spot.z), new Vector2(x, z)) < patch.Spacing;
-                if (crowded)
+                    crowded |= Vector2.Distance(new Vector2(spot.x, spot.z), new Vector2(here.x, here.z)) < patch.Spacing;
+                if (crowded || ClashesWithAny(kinds, here, taken, obstacles))
                     continue;
                 spots.Add(here);
+                // Any of the shapes may come up here, so the next spot leaves room for each.
+                foreach (HarvestableEntity kind in kinds)
+                    taken.Add(NodeRoom.Of(kind, here));
             }
             Random.state = previous;
 
@@ -3001,6 +3524,7 @@ namespace MultiplayerARPG.Demo.EditorTools
             if (spots.Count < patch.Most)
                 Debug.LogWarning($"[{nameof(DemoSceneBuilder)}] {patch.Node} patch at {patch.Centre} only found " +
                                  $"{spots.Count} spots for up to {patch.Most} nodes.");
+            return spots.Count;
         }
 
         /// <summary>Rings small props around a point, used for the campfire stones.</summary>
@@ -3019,13 +3543,16 @@ namespace MultiplayerARPG.Demo.EditorTools
 
         private static GameObject InstantiateNature(string prefabName, Transform parent)
         {
+            GameObject prefab = LoadNature(prefabName);
+            return prefab == null ? null : (GameObject)PrefabUtility.InstantiatePrefab(prefab, parent);
+        }
+
+        private static GameObject LoadNature(string prefabName)
+        {
             GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>($"{NatureDir}/{prefabName}.prefab");
             if (prefab == null)
-            {
                 Debug.LogError($"[{nameof(DemoSceneBuilder)}] No nature prefab named \"{prefabName}\".");
-                return null;
-            }
-            return (GameObject)PrefabUtility.InstantiatePrefab(prefab, parent);
+            return prefab;
         }
 
         /// <summary>A band of terrain a group of props is allowed to grow in.</summary>
@@ -3294,16 +3821,87 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// </summary>
         private static System.Collections.Generic.List<Vector3> BuildNature(Scene scene)
         {
+            return ScatterNature(Root(scene, "Nature").transform);
+        }
+
+        /// <summary>
+        /// Where the scatter puts its boulders, without scattering anything: the same seeded
+        /// walk as <see cref="BuildNature"/>, with nothing placed along the way. Rebuild
+        /// Harvestable Nodes stands the stone up from this, and so gets the spots a
+        /// regenerate would.
+        ///
+        /// **Which is not always the spots that fit the scene as it stands.** The walk only
+        /// repeats the one that laid the `Nature` root if every input is unchanged, and one
+        /// sample decided differently - the homestead's clearance, its levelled ground - shifts
+        /// the seeded stream for everything after it. Then the plan's boulders and the rock
+        /// already in the scene no longer interleave, and a node could stand inside a scattered
+        /// rock. See <see cref="DropSpotsInScenery"/>, which the rebuild runs over the plan.
+        /// </summary>
+        private static System.Collections.Generic.List<Vector3> PlanBoulders()
+        {
+            return ScatterNature(null);
+        }
+
+        /// <summary>
+        /// How close a boulder's foot may come to scattered rock. Tight on purpose: the Rocks
+        /// band gives its pebbles colliders too, and a boulder brushing a pebble is scenery,
+        /// not a fault - the case this is for is a boulder stood inside a rock.
+        /// </summary>
+        private const float BoulderSceneryClearance = 0.5f;
+
+        /// <summary>
+        /// Takes out every planned boulder spot that lands on or against rock the `Nature` root
+        /// already holds, and says how many. Only Rebuild Harvestable Nodes needs it: a full
+        /// regenerate lays the rock and plans the boulders in one walk, so the two never meet.
+        /// The scenery's colliders are on Default, which <see cref="SceneObstacles"/> passes
+        /// over - rightly, since the kit's own spawn test ignores them too - so they are
+        /// checked here instead.
+        /// </summary>
+        private static int DropSpotsInScenery(Scene scene, System.Collections.Generic.List<Vector3> boulders)
+        {
+            GameObject nature = FindRoot(scene, "Nature");
+            if (nature == null)
+                return 0;
+            var rock = new System.Collections.Generic.List<Bounds>();
+            foreach (Collider collider in nature.GetComponentsInChildren<Collider>(true))
+            {
+                Bounds bounds = collider.bounds;
+                if (bounds.size != Vector3.zero)
+                    rock.Add(bounds);
+            }
+            int before = boulders.Count;
+            boulders.RemoveAll(spot =>
+            {
+                foreach (Bounds bounds in rock)
+                {
+                    if (bounds.SqrDistance(spot) < BoulderSceneryClearance * BoulderSceneryClearance)
+                        return true;
+                }
+                return false;
+            });
+            return before - boulders.Count;
+        }
+
+        /// <summary>
+        /// The scatter itself, under `root`, or with no root only planned. Every random
+        /// number is drawn either way, in the same order, which is what lets the two agree
+        /// to the spot.
+        /// </summary>
+        private static System.Collections.Generic.List<Vector3> ScatterNature(Transform root)
+        {
             var boulders = new System.Collections.Generic.List<Vector3>();
-            GameObject root = Root(scene, "Nature");
             Random.State previous = Random.state;
             Random.InitState(ScatterSeed);
 
             float half = DemoIslandBuilder.Size * 0.5f - 4f;
             foreach (Band band in Bands)
             {
-                var group = new GameObject(band.Group);
-                group.transform.SetParent(root.transform, false);
+                GameObject group = null;
+                if (root != null)
+                {
+                    group = new GameObject(band.Group);
+                    group.transform.SetParent(root, false);
+                }
 
                 Vector2[] centres = band.Clusters > 0 ? PickClusterCentres(band, half) : null;
 
@@ -3349,16 +3947,23 @@ namespace MultiplayerARPG.Demo.EditorTools
                         continue;
                     }
 
-                    GameObject prop = InstantiateNature(chosen, group.transform);
-                    if (prop == null)
+                    GameObject prefab = LoadNature(chosen);
+                    if (prefab == null)
                         break;
+                    float yaw = Random.Range(0f, 360f);
+                    float scale = Random.Range(band.MinScale, band.MaxScale);
+                    ++placed;
+                    if (group == null)
+                        continue;
+                    var prop = (GameObject)PrefabUtility.InstantiatePrefab(prefab, group.transform);
                     prop.transform.position = new Vector3(x, height, z);
-                    prop.transform.rotation = Quaternion.Euler(0f, Random.Range(0f, 360f), 0f);
-                    prop.transform.localScale = Vector3.one * Random.Range(band.MinScale, band.MaxScale);
+                    prop.transform.rotation = Quaternion.Euler(0f, yaw, 0f);
+                    prop.transform.localScale = Vector3.one * scale;
                     if (band.Collide)
                         AddCollider(prop);
-                    ++placed;
                 }
+                if (group == null)
+                    continue;
                 MarkStatic(group);
                 if (placed < band.Count)
                     Debug.LogWarning($"[{nameof(DemoSceneBuilder)}] {band.Group}: only placed {placed} of {band.Count}.");
@@ -3465,21 +4070,72 @@ namespace MultiplayerARPG.Demo.EditorTools
             return DemoIslandBuilder.SmoothSlopeAt(x, z);
         }
 
-        private static void BuildSpawners(Scene scene)
+        private const string SpawnerRootName = "Spawners";
+
+        /// <summary>
+        /// Adds every spawn area in <see cref="BuildSpawners"/> that the map does not have
+        /// yet, by name, and leaves alone every one it does - including one moved by hand -
+        /// apart from baking its spawn spots where it now stands (<see cref="DemoSpawnSpotBaker"/>).
+        ///
+        /// A new enemy family needs its areas in the map, and the only other thing that lays
+        /// them down is Regenerate Island Scene, which rebuilds the island around them. The
+        /// bandits' archers were added this way.
+        /// </summary>
+        [MenuItem("Open MMORPG/Demo/Add Missing Spawners (writes DemoMap)")]
+        public static void AddMissingSpawners()
         {
-            GameObject root = Root(scene, "Spawners");
+            // Opening the map replaces whatever is open, and OpenScene does not ask: unsaved
+            // edits to DemoMap - work under Authored included - would simply be gone.
+            if (!EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo())
+                return;
+            Scene scene = EditorSceneManager.OpenScene(ScenePath, OpenSceneMode.Single);
+            GameObject root = FindRoot(scene, SpawnerRootName);
+            int before = root != null ? root.transform.childCount : 0;
+            root = BuildSpawners(scene);
+            int added = root != null ? root.transform.childCount - before : 0;
+            // A new area arrives with no spots, and without them it misses everything downhill
+            // of its centre. The rest are rebaked where they stand; unchanged ones stay as they are.
+            int rebaked = DemoSpawnSpotBaker.Bake(scene);
+            if (added > 0 || rebaked > 0)
+            {
+                EditorSceneManager.MarkSceneDirty(scene);
+                EditorSceneManager.SaveScene(scene);
+            }
+            Debug.Log($"[{nameof(DemoSceneBuilder)}] Added {added} spawn area(s) to {ScenePath}" +
+                      (added > 0 ? "" : "; it had them all") + $", and rebaked the spots of {rebaked}." +
+                      (added > 0 || rebaked > 0 ? " A map server running from builds/ needs Build Map Server before it has them." : ""));
+        }
+
+        private static GameObject FindRoot(Scene scene, string name)
+        {
+            foreach (GameObject root in scene.GetRootGameObjects())
+            {
+                if (root.name == name)
+                    return root;
+            }
+            return null;
+        }
+
+        /// <summary>Lays down every spawn area the map is missing, by name. Returns the root they are under.</summary>
+        private static GameObject BuildSpawners(Scene scene)
+        {
+            GameObject root = FindRoot(scene, SpawnerRootName);
+            if (root == null)
+                root = Root(scene, SpawnerRootName);
 
             MonsterCharacterEntity banditMale = LoadEntity($"{EntityDir}/DemoBanditMale.prefab");
             MonsterCharacterEntity banditFemale = LoadEntity($"{EntityDir}/DemoBanditFemale.prefab");
+            MonsterCharacterEntity archerMale = LoadEntity($"{EntityDir}/DemoBanditArcherMale.prefab");
+            MonsterCharacterEntity archerFemale = LoadEntity($"{EntityDir}/DemoBanditArcherFemale.prefab");
             MonsterCharacterEntity cultistMale = LoadEntity($"{EntityDir}/DemoCultistMale.prefab");
             MonsterCharacterEntity cultistFemale = LoadEntity($"{EntityDir}/DemoCultistFemale.prefab");
             MonsterCharacterEntity marauderMale = LoadEntity($"{EntityDir}/DemoMarauderMale.prefab");
             MonsterCharacterEntity marauderFemale = LoadEntity($"{EntityDir}/DemoMarauderFemale.prefab");
             MonsterCharacterEntity wolf = LoadEntity($"{EntityDir}/DemoWolf.prefab");
-            if (banditMale == null || banditFemale == null || cultistMale == null ||
-                cultistFemale == null || marauderMale == null || marauderFemale == null ||
-                wolf == null)
-                return;
+            if (banditMale == null || banditFemale == null || archerMale == null || archerFemale == null ||
+                cultistMale == null || cultistFemale == null || marauderMale == null ||
+                marauderFemale == null || wolf == null)
+                return root;
 
             // Weakest nearest the village, toughest at the camp, so difficulty rises as the
             // player works outward from where they spawn.
@@ -3498,6 +4154,10 @@ namespace MultiplayerARPG.Demo.EditorTools
             // short of the crypt.
             AddSpawner(root, "Spawn_Outskirts", new Vector2(14f, 0f), 30f, banditMale, 1, 2, 8);
             AddSpawner(root, "Spawn_Woods", new Vector2(26f, 30f), 38f, banditFemale, 2, 4, 7);
+            // The bandits' archers stand with two of the bands: the woods, and the camp below.
+            // Not the outskirts, which are a new character's first bandits - a shot from twelve
+            // metres is a second lesson, not a first.
+            AddSpawner(root, "Spawn_Woods_Archers", new Vector2(26f, 30f), 34f, archerMale, 2, 4, 3);
             AddSpawner(root, "Spawn_Woods_Cultists", new Vector2(26f, 30f), 34f, cultistMale, 3, 4, 4);
             // The hill areas sit south-west of the crypt rather than on it. A spawn area
             // finds its ground with a ray from above, and the crypt's roof is ground to a
@@ -3507,6 +4167,7 @@ namespace MultiplayerARPG.Demo.EditorTools
             AddSpawner(root, "Spawn_Hills_Marauders", new Vector2(-14f, -58f), 24f, marauderMale, 5, 6, 4);
             AddSpawner(root, "Spawn_Camp", DemoIslandBuilder.CampCentre, 16f, marauderFemale, 6, 8, 5);
             AddSpawner(root, "Spawn_Camp_Bandits", DemoIslandBuilder.CampCentre, 16f, banditFemale, 6, 8, 4);
+            AddSpawner(root, "Spawn_Camp_Archers", DemoIslandBuilder.CampCentre, 16f, archerFemale, 6, 8, 3);
 
             // Wolves: four small packs ringing the village, and the first fight the island
             // offers anyone.
@@ -3532,6 +4193,7 @@ namespace MultiplayerARPG.Demo.EditorTools
             AddSpawner(root, "Spawn_Wolves_Southeast", green + new Vector2(29f, -29f), 10f, wolf, 1, 2, 4);
             AddSpawner(root, "Spawn_Wolves_South", green + new Vector2(0f, -41f), 10f, wolf, 1, 2, 4);
             AddSpawner(root, "Spawn_Wolves_West", green + new Vector2(-41f, 0f), 10f, wolf, 1, 2, 3);
+            return root;
         }
 
         private static MonsterCharacterEntity LoadEntity(string path)
@@ -3565,6 +4227,10 @@ namespace MultiplayerARPG.Demo.EditorTools
 
         private static void AddSpawner(GameObject root, string name, Vector2 centre, float radius, MonsterCharacterEntity prefab, short minLevel, short maxLevel, int amount)
         {
+            // One the map already has is left exactly where it stands - see AddMissingSpawners.
+            if (root.transform.Find(name) != null)
+                return;
+
             // Nothing may spawn within reach of where players arrive. A monster spawn area
             // is a disc, and the outskirts one was wide enough to cover the village green
             // itself — so a character logged in standing among eight bandits and was killed
@@ -3667,7 +4333,7 @@ namespace MultiplayerARPG.Demo.EditorTools
         internal static void MarkStatic(GameObject root)
         {
             var moving = new System.Collections.Generic.HashSet<Transform>();
-            foreach (MultiplayerARPG.Demo.DemoDoor door in root.GetComponentsInChildren<MultiplayerARPG.Demo.DemoDoor>(true))
+            foreach (MultiplayerARPG.SceneryDoor door in root.GetComponentsInChildren<MultiplayerARPG.SceneryDoor>(true))
             {
                 if (door.pivot == null)
                     continue;

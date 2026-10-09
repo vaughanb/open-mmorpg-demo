@@ -114,7 +114,7 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// its own object, and SetModel writes the choice into that entity's PublicInts, so
         /// anywhere else it would throw the first time a player clicked a hairstyle. The
         /// kit's UIBodyPartManager finds it there; SetupModelBodyParts does not, which
-        /// DemoSavedBodyParts is for.
+        /// UICharacterSelectAppearance is for.
         ///
         /// Options carry no references into the model - only socket names, group indices
         /// and materials - so the same entity could point at a different model later.

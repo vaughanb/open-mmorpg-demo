@@ -97,9 +97,9 @@ namespace MultiplayerARPG.Demo.EditorTools
             // The flame, down in the basket where the village's is, and switched **off**:
             // an unlit fire is what an empty campfire should look like, and the entity's own
             // turn-on event is what lights it.
-            MultiplayerARPG.Demo.DemoTorch torch = DemoFlameBuilder.Light(
+            MultiplayerARPG.TimeOfDayLight torch = DemoFlameBuilder.Light(
                 DemoFlameBuilder.CampfireFlamePath, fire.transform, new Vector3(0f, 0.85f, 0f),
-                MultiplayerARPG.Demo.DemoTorch.Schedule.Always);
+                MultiplayerARPG.TimeOfDayLight.Schedule.Always);
             GameObject flame = torch != null ? torch.gameObject : null;
             if (flame != null)
                 flame.SetActive(false);

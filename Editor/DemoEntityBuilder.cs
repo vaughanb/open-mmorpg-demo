@@ -1,4 +1,4 @@
-﻿using MultiplayerARPG.GameData.Model.Playables;
+using MultiplayerARPG.GameData.Model.Playables;
 using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
@@ -28,19 +28,19 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// <summary>
         /// The two prefabs every entity here is cloned from. **They are tooling, not
         /// content**: nothing in the game references them, nothing spawns them, and they
-        /// appear in no database - so an asset sweep that goes by "is anything pointing at
-        /// this" will take them, and on 2026-09-23 something had already taken
-        /// `BaseCharacter.prefab`. Both are tracked in the kit repo, so the way back is
-        /// `git checkout -- Demo/Prefabs/GamePlay/CharacterEntities/BaseCharacter.prefab*`
-        /// from `Assets/OpenMMORPG`.
+        /// appear in no database. So they live in this repository's `Templates` folder, not
+        /// in the demo, which ships without its tooling (moved there on 2026-10-07; before
+        /// that they sat in `Demo/Prefabs/GamePlay/CharacterEntities`, where an asset sweep
+        /// took `BaseCharacter.prefab` once, and both shipped in the package).
         ///
         /// They are allowed to be old. `Build` strips the arrangement they carry - the
         /// placeholder capsule, the model component on the root - and the later steps of
         /// the pipeline put back what they never had, so a template from months ago still
         /// produces a current entity. See <see cref="Build"/> for what is added on top.
         /// </summary>
-        private const string PlayerTemplate = EntityDir + "/BaseCharacter.prefab";
-        private const string EnemyTemplate = EntityDir + "/BaseEnemy.prefab";
+        public const string TemplateDir = "Assets/OpenMMORPG_DemoBuilder/Templates";
+        private const string PlayerTemplate = TemplateDir + "/BaseCharacter.prefab";
+        public const string EnemyTemplate = TemplateDir + "/BaseEnemy.prefab";
 
         /// <summary>
         /// Whether a prefab in the entity folder is one of the two templates.
@@ -49,7 +49,7 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// folder as the entities, and `BaseCharacter.prefab` carries a real
         /// `PlayerCharacterEntity`, so a sweep that says "every player prefab in this
         /// folder" picks it up and edits it - which is how it came to be carrying a
-        /// `DemoSkinTone` it has no use for and showing as modified in the kit repo.
+        /// `SkinTone` it has no use for and showing as modified in the kit repo.
         /// Every folder sweep here should skip these two.
         /// </summary>
         public static bool IsTemplate(string assetPath)
@@ -69,15 +69,36 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// in `DemoPlayerController`.
         ///
         /// **They cannot simply both be 60**, because the kit couples the body to the respawn:
-        /// `RespawnRoutine(DestroyDelay + DestroyRespawnDelay)`. A minute-long body means a
-        /// minute-long wait for the monster to come back, on an island small enough to clear.
-        /// 30 seconds is long enough to finish a fight and walk over to loot, and puts the
-        /// monster back 35 seconds after it died rather than 7.
+        /// `SpawnArea.Spawn(..., DestroyDelay + DestroyRespawnDelay)` counts the wait from the
+        /// kill, so a monster never comes back before its body has gone and a longer body is a
+        /// longer respawn. 30 seconds is long enough to finish a fight and walk over to loot;
+        /// <see cref="RespawnAfterBody"/> is the wait after that.
         /// </summary>
         internal const float CorpseLifetime = 30f;
 
-        /// <summary>Added to <see cref="CorpseLifetime"/> to give the respawn delay.</summary>
-        internal const float RespawnAfterBody = 5f;
+        /// <summary>
+        /// How long a monster keeps after a target it cannot reach before giving up and
+        /// walking home. The kit's template ships 5 seconds, which is counted only while the
+        /// monster is out of attack range - so a player who backed off for five seconds, or
+        /// was Charged away from, watched the enemy turn round and leave. Fifteen is long
+        /// enough that a pull is a pull; `maxDistanceFromSpawnPoint` (50m) is still the leash.
+        /// Since 2026-10-02, when the people were made aggressive - see
+        /// `DemoDatabaseWiring.MonsterSpec.Characteristic`.
+        /// </summary>
+        private const float ChaseSeconds = 15f;
+
+        /// <summary>
+        /// Added to <see cref="CorpseLifetime"/> to give the respawn delay: a monster is back two
+        /// minutes after it died - thirty seconds as a body, then ninety with nothing there. It
+        /// was 5 until 2026-09-24, which brought a kill back in 35 seconds, and 30 until
+        /// 2026-10-06, a minute; both proved too quick in play (user's call: two minutes; WoW's
+        /// open world is about five).
+        ///
+        /// Every monster takes it, the deer included: `DemoWildlifeBuilder` applies both numbers
+        /// to what it clones. A spawn area's own `destroyRespawnDelay` replaces this one when it
+        /// is set, which is how the crypt keeps its longer waits - see `DemoDungeonBuilder.Spawner`.
+        /// </summary>
+        internal const float RespawnAfterBody = 90f;
 
         // The Quaternius characters stand about 1.75m, so the placeholder capsule's
         // 0.5m radius is far too wide for them - they would not fit between the
@@ -106,6 +127,10 @@ namespace MultiplayerARPG.Demo.EditorTools
             // class's armour no matter what it was wearing.
             Build(EnemyTemplate, $"{ModelDir}/BanditModel_Male.prefab", $"{EntityDir}/DemoBanditMale.prefab", "BaseEnemy");
             Build(EnemyTemplate, $"{ModelDir}/BanditModel_Female.prefab", $"{EntityDir}/DemoBanditFemale.prefab", "BaseEnemy");
+            // The bandits' archers, a family of their own because a monster's attack is its
+            // data's: these shoot. See the BanditArcher spec in DemoDatabaseWiring.
+            Build(EnemyTemplate, $"{ModelDir}/BanditArcherModel_Male.prefab", $"{EntityDir}/DemoBanditArcherMale.prefab", "BanditArcher");
+            Build(EnemyTemplate, $"{ModelDir}/BanditArcherModel_Female.prefab", $"{EntityDir}/DemoBanditArcherFemale.prefab", "BanditArcher");
             Build(EnemyTemplate, $"{ModelDir}/MarauderModel_Male.prefab", $"{EntityDir}/DemoMarauderMale.prefab", "Marauder");
             Build(EnemyTemplate, $"{ModelDir}/MarauderModel_Female.prefab", $"{EntityDir}/DemoMarauderFemale.prefab", "Marauder");
             Build(EnemyTemplate, $"{ModelDir}/CultistModel_Male.prefab", $"{EntityDir}/DemoCultistMale.prefab", "Cultist");
@@ -128,6 +153,14 @@ namespace MultiplayerARPG.Demo.EditorTools
             string[] guardArms = { "IronLongsword", "PaintedRoundShield" };
             BuildNpc($"{ModelDir}/GuardModel_Male.prefab", $"{EntityDir}/DemoGuard.prefab", guardArms, false);
             BuildNpc($"{ModelDir}/GuardModel_Male.prefab", $"{EntityDir}/DemoPatrolGuard.prefab", guardArms, true);
+            // Other builders add these to a player body, and the template has none of them,
+            // so the rebuild above has just dropped them. Each one used to be a separate menu
+            // step to remember afterwards. On 2026-10-02 a rebuild without them hid the skin
+            // and size sliders on the create screen (each hides itself when the body has no
+            // component) and took the rider off the horse, with nothing logged.
+            DemoMountBuilder.RebuildRiders();
+            DemoSkinToneBuilder.WritePlayerComponents();
+            DemoCharacterSizeBuilder.WritePlayerComponents();
             EnsureEntitySetting();
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();
@@ -209,7 +242,7 @@ namespace MultiplayerARPG.Demo.EditorTools
             if (armedWith != null)
             {
                 foreach (string item in armedWith)
-                    Arm(modelInstance, item);
+                    Arm(modelInstance, item, true);
             }
 
             if (patrols)
@@ -223,7 +256,7 @@ namespace MultiplayerARPG.Demo.EditorTools
                 agent.height = CharacterHeight;
                 agent.radius = CharacterRadius;
                 agent.stoppingDistance = 0.3f;
-                entity.AddComponent<MultiplayerARPG.Demo.DemoPatrol>();
+                entity.AddComponent<MultiplayerARPG.NpcPatrol>();
             }
             DemoAudioWiring.WireCharacter(entity, modelPath.Contains("Female"));
 
@@ -240,15 +273,6 @@ namespace MultiplayerARPG.Demo.EditorTools
             Debug.Log($"[{nameof(DemoEntityBuilder)}] Built {outputPath}.");
         }
 
-        /// <summary>
-        /// Puts a piece of equipment in an NPC's hand.
-        ///
-        /// NPCs have no equipment of their own, so the item asset's model entry - which
-        /// prefab, which hand, and the grip offsets the kit applies when a player equips
-        /// it - is read and applied by hand. The guard then holds the sword exactly as a
-        /// player holding the same sword does, and a change to the item's grip reaches
-        /// both the next time they are built.
-        /// </summary>
         /// <summary>
         /// How far an NPC lowers a weapon from the grip a player wields it with, in degrees
         /// about the weapon's own Z - the blade's flat normal, so the blade drops within
@@ -282,13 +306,42 @@ namespace MultiplayerARPG.Demo.EditorTools
             { "IronLongsword", -48f },
         };
 
-        private const string UseSkillScriptPath = "Assets/OpenMMORPG/Demo/Scripts/DemoUseSkillComponent.cs";
+        /// <summary>
+        /// Gives a player entity the demo's ladder component, which carries the character on
+        /// and off the rungs and sets the climbing pace (see
+        /// <see cref="MultiplayerARPG.EasedCharacterLadderComponent"/>). A kit component already
+        /// on the entity (every player built before 2026-10-02 has one) has its script swapped
+        /// in place, as <see cref="FocusCasting"/> does, so it keeps its file id and
+        /// its place in the behaviour order.
+        /// </summary>
+        private static void GiveLadderComponent(GameObject entity)
+        {
+            var existing = entity.GetComponent<CharacterLadderComponent>();
+            if (existing is MultiplayerARPG.EasedCharacterLadderComponent)
+                return;
+            if (existing == null)
+            {
+                entity.AddComponent<MultiplayerARPG.EasedCharacterLadderComponent>();
+                return;
+            }
+            var script = DemoScriptAssets.Of(typeof(MultiplayerARPG.EasedCharacterLadderComponent));
+            if (script == null)
+            {
+                Debug.LogError($"[{nameof(DemoEntityBuilder)}] {entity.name} keeps the kit's ladder component: no script asset defines {nameof(MultiplayerARPG.EasedCharacterLadderComponent)}.");
+                return;
+            }
+            var serialized = new SerializedObject(existing);
+            serialized.FindProperty("m_Script").objectReferenceValue = script;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            if (entity.GetComponent<MultiplayerARPG.EasedCharacterLadderComponent>() == null)
+                Debug.LogError($"[{nameof(DemoEntityBuilder)}] Swapping {entity.name}'s ladder component script did not take.");
+        }
 
         /// <summary>
         /// The chance a hit taken while casting breaks the cast. The kit's rule is certainty;
         /// at about one in three, a Meteor (1.4s, roughly one bite long) mostly gets through a
         /// wolf, and an Arcane Bolt (0.6s) nearly always. See
-        /// <see cref="MultiplayerARPG.Demo.DemoUseSkillComponent"/>.
+        /// <see cref="MultiplayerARPG.InterruptChanceUseSkillComponent"/>.
         /// </summary>
         private const float CastInterruptChance = 0.35f;
 
@@ -304,27 +357,60 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// </summary>
         private static void FocusCasting(GameObject entity)
         {
-            var script = AssetDatabase.LoadAssetAtPath<MonoScript>(UseSkillScriptPath);
+            var script = DemoScriptAssets.Of(typeof(MultiplayerARPG.InterruptChanceUseSkillComponent));
             var component = entity.GetComponent<DefaultCharacterUseSkillComponent>();
             if (script == null || component == null)
             {
                 Debug.LogError($"[{nameof(DemoEntityBuilder)}] Could not give {entity.name} the demo's skill " +
-                               $"component: {(script == null ? UseSkillScriptPath + " is missing" : "it has no skill component")}.");
+                               $"component: {(script == null ? "no script asset defines " + nameof(MultiplayerARPG.InterruptChanceUseSkillComponent) : "it has no skill component")}.");
                 return;
             }
-            if (!(component is MultiplayerARPG.Demo.DemoUseSkillComponent))
+            if (!(component is MultiplayerARPG.InterruptChanceUseSkillComponent))
             {
                 var serialized = new SerializedObject(component);
                 serialized.FindProperty("m_Script").objectReferenceValue = script;
                 serialized.ApplyModifiedPropertiesWithoutUndo();
             }
-            var focus = entity.GetComponent<MultiplayerARPG.Demo.DemoUseSkillComponent>();
+            var focus = entity.GetComponent<MultiplayerARPG.InterruptChanceUseSkillComponent>();
             if (focus == null)
             {
                 Debug.LogError($"[{nameof(DemoEntityBuilder)}] Swapping {entity.name}'s skill component script did not take.");
                 return;
             }
             focus.interruptChance = CastInterruptChance;
+        }
+
+        /// <summary>
+        /// Swaps a monster's brain for the demo's, which has to see a target before it
+        /// notices it (<see cref="MultiplayerARPG.LineOfSightMonsterActivityComponent"/>). The
+        /// kit's search is a sphere with no occlusion test, and once the people were
+        /// aggressive the whole crypt took the player through its floors at once.
+        ///
+        /// Same in-place script swap as <see cref="FocusCasting"/>: the template's component
+        /// keeps its file id, its order and every value on it. The wildlife builder calls this
+        /// too, so a wolf and a bandit notice by the same rule. Returns the component, or
+        /// null when the entity has none.
+        /// </summary>
+        internal static MonsterActivityComponent GiveSight(GameObject entity)
+        {
+            var existing = entity.GetComponent<MonsterActivityComponent>();
+            if (existing == null)
+                return null;
+            if (existing is MultiplayerARPG.LineOfSightMonsterActivityComponent)
+                return existing;
+            var script = DemoScriptAssets.Of(typeof(MultiplayerARPG.LineOfSightMonsterActivityComponent));
+            if (script == null)
+            {
+                Debug.LogError($"[{nameof(DemoEntityBuilder)}] {entity.name} keeps the kit's monster brain: no script asset defines {nameof(MultiplayerARPG.LineOfSightMonsterActivityComponent)}.");
+                return existing;
+            }
+            var serialized = new SerializedObject(existing);
+            serialized.FindProperty("m_Script").objectReferenceValue = script;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            var swapped = entity.GetComponent<MultiplayerARPG.LineOfSightMonsterActivityComponent>();
+            if (swapped == null)
+                Debug.LogError($"[{nameof(DemoEntityBuilder)}] Swapping {entity.name}'s monster brain script did not take.");
+            return swapped != null ? swapped : entity.GetComponent<MonsterActivityComponent>();
         }
 
         /// <summary>The player skill that dashes, and the empty child its handler moves.</summary>
@@ -350,7 +436,7 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// sets that transform's local height straight from `jumpCurve` - not added to the
         /// resting height, set to it - and the default curve rises to a metre, which is a leap
         /// attack. Charge is a run. Pointed at the model, even a flat curve would pin its height
-        /// to zero, and `DemoSurfaceSwimmer` moves the model's height too; an empty child moves
+        /// to zero, and `SurfaceSwimmer` moves the model's height too; an empty child moves
         /// nothing anyone can see. Point it at the model and give it a curve if a skill should
         /// ever jump.
         /// </summary>
@@ -410,19 +496,30 @@ namespace MultiplayerARPG.Demo.EditorTools
             EditorUtility.SetDirty(prefab);
         }
 
-        private static void Arm(GameObject modelInstance, string itemName)
+        /// <summary>
+        /// Puts a piece of equipment in the hand of a character that cannot equip it: an NPC,
+        /// which has no equipment at all, or a monster, which has no weapon slot.
+        ///
+        /// The item asset's model entry - which prefab, which hand, and the grip offsets the
+        /// kit applies when a player equips it - is read and applied by hand, so the model
+        /// holds the item exactly as a player holding the same item does, and a change to the
+        /// item's grip reaches it the next time it is built. <paramref name="carried"/> lowers
+        /// it by <see cref="CarryTilt"/>, for a body that stands relaxed rather than on guard.
+        /// </summary>
+        /// <returns>The item, or null if it could not be held.</returns>
+        private static BaseItem Arm(GameObject modelInstance, string itemName, bool carried)
         {
             var item = AssetDatabase.LoadAssetAtPath<BaseItem>($"Assets/OpenMMORPG/Demo/GameData/Resources/Items/{itemName}.asset");
             if (item == null)
             {
-                Debug.LogError($"[{nameof(DemoEntityBuilder)}] No item \"{itemName}\" to arm an NPC with. Run Build Items first.");
-                return;
+                Debug.LogError($"[{nameof(DemoEntityBuilder)}] No item \"{itemName}\" to arm {modelInstance.transform.root.name} with. Run Build Items first.");
+                return null;
             }
             SerializedProperty models = new SerializedObject(item).FindProperty("equipmentModels");
             if (models == null || models.arraySize == 0)
             {
                 Debug.LogError($"[{nameof(DemoEntityBuilder)}] \"{itemName}\" has no equipment model to hold.");
-                return;
+                return null;
             }
             SerializedProperty model = models.GetArrayElementAtIndex(0);
             string socket = model.FindPropertyRelative("equipSocket").stringValue;
@@ -431,16 +528,187 @@ namespace MultiplayerARPG.Demo.EditorTools
             if (prefab == null || container == null)
             {
                 Debug.LogError($"[{nameof(DemoEntityBuilder)}] Cannot hold \"{itemName}\": no prefab, or no \"{socket}\" socket on {modelInstance.name}.");
-                return;
+                return null;
             }
             var held = (GameObject)PrefabUtility.InstantiatePrefab(prefab, container);
             held.transform.localPosition = model.FindPropertyRelative("localPosition").vector3Value;
             held.transform.localEulerAngles = model.FindPropertyRelative("localEulerAngles").vector3Value;
             float tilt;
-            if (CarryTilt.TryGetValue(itemName, out tilt))
+            if (carried && CarryTilt.TryGetValue(itemName, out tilt))
                 held.transform.localRotation *= Quaternion.Euler(0f, 0f, tilt);
             Vector3 scale = model.FindPropertyRelative("localScale").vector3Value;
             held.transform.localScale = scale == Vector3.zero ? Vector3.one : scale;
+            // The bow is told which item it is, which the kit does for one it equips: it has
+            // to introduce itself to the character to draw and loose. See BowEquipmentEntity.heldItem.
+            var bow = held.GetComponent<MultiplayerARPG.BowEquipmentEntity>();
+            if (bow != null)
+                bow.heldItem = item;
+            return item;
+        }
+
+        /// <summary>
+        /// Puts a monster family's weapon in its hand: the item its `MonsterSpec` names.
+        ///
+        /// **This is the only way a monster holds anything.** The kit's `MonsterCharacter`
+        /// has no weapon slot, so the item cannot be equipped. The database builder used to
+        /// write it to a `rightHandEquipItem` field only player data has, found nothing, said
+        /// nothing - and every bandit, marauder and cultist came up empty-handed and fought
+        /// with its fists. The item's model is put in the hand here instead, the way the
+        /// guards' swords are, and the body plays that weapon's animations as its own defaults
+        /// (see `DemoCharacterBuilder.Wields`). Wielded, not carried: the body stands the way a
+        /// player holding the weapon does, which is the stance its grip was captured in.
+        ///
+        /// The two are checked against each other, because they are set in two places and an
+        /// axe in the hand of a body that draws a bow would read as nothing at all.
+        /// </summary>
+        private static void ArmMonster(GameObject modelInstance, string modelPath, string monsterData)
+        {
+            string weapon = DemoDatabaseWiring.MonsterWeapon(monsterData);
+            string wields = DemoCharacterBuilder.Wields(System.IO.Path.GetFileNameWithoutExtension(modelPath));
+            BaseItem item = weapon != null ? Arm(modelInstance, weapon, false) : null;
+            WearQuiver(modelInstance, modelPath, item);
+            var weaponItem = item as IWeaponItem;
+            string type = weaponItem != null && weaponItem.WeaponType != null ? weaponItem.WeaponType.name : null;
+            if (type != wields)
+                Debug.LogError($"[{nameof(DemoEntityBuilder)}] \"{monsterData}\" holds {weapon ?? "nothing"} " +
+                               $"({type ?? "no weapon type"}), but its body fights with {wields ?? "bare hands"}. " +
+                               "Make the Weapon in its MonsterSpec (DemoDatabaseWiring) and the Wields of its " +
+                               "model's Variant (DemoCharacterBuilder) agree.");
+        }
+
+        /// <summary>The baked quiver's name on a monster's back, so a rebuild can find and replace it.</summary>
+        private const string WornQuiverName = "WornQuiver";
+
+        /// <summary>
+        /// Hangs a full quiver on the back of a monster whose weapon is carried with one - the
+        /// Bandit Archer's bow (2026-10-05) - **for looks only**: the user's call, the quiver does
+        /// not empty. A monster has no bag and its shots cost nothing (see `DemoSuppliesBuilder`), so there
+        /// is nothing for it to count, and the counting component is taken off this copy.
+        ///
+        /// Where it goes is the item's own: the quiver entry of the bow's `equipmentModels` (see
+        /// `DemoItemBuilder.WriteSheathModel`), so it hangs exactly where a player's does and a hand
+        /// edit to that pose reaches the archers at the next build. The socket it names,
+        /// `SheathBack`, is on the players' bodies only, so it is made here: measured by
+        /// `DemoSheathBuilder` the same way, on a scratch copy of this body - measuring on the model
+        /// nested in the entity would leave every bone it posed as an override in the entity prefab.
+        /// Baked like the bow in the hand, and like it, it survives at run time: the kit only
+        /// destroys equipment it instantiated itself.
+        /// </summary>
+        private static void WearQuiver(GameObject modelInstance, string modelPath, BaseItem item)
+        {
+            foreach (Transform t in modelInstance.GetComponentsInChildren<Transform>(true))
+            {
+                if (t.name == WornQuiverName)
+                {
+                    Object.DestroyImmediate(t.gameObject);
+                    break;
+                }
+            }
+            if (item == null)
+                return;
+            SerializedProperty models = new SerializedObject(item).FindProperty("equipmentModels");
+            SerializedProperty entry = null;
+            GameObject prefab = null;
+            for (int i = 0; models != null && i < models.arraySize; ++i)
+            {
+                var candidate = models.GetArrayElementAtIndex(i).FindPropertyRelative("meshPrefab").objectReferenceValue as GameObject;
+                if (candidate != null && candidate.GetComponent<MultiplayerARPG.QuiverArrows>() != null)
+                {
+                    entry = models.GetArrayElementAtIndex(i);
+                    prefab = candidate;
+                    break;
+                }
+            }
+            if (entry == null)
+                return;
+
+            string socketName = entry.FindPropertyRelative("equipSocket").stringValue;
+            Transform socket = Socket(modelInstance, socketName) ?? FindChild(modelInstance.transform, socketName);
+            if (socket == null && socketName == DemoSheathBuilder.SocketBack)
+                socket = MakeBackSocket(modelInstance, modelPath);
+            if (socket == null)
+            {
+                Debug.LogError($"[{nameof(DemoEntityBuilder)}] No \"{socketName}\" on {modelInstance.transform.root.name} to hang {item.name}'s quiver from.");
+                return;
+            }
+            var quiver = (GameObject)PrefabUtility.InstantiatePrefab(prefab, socket);
+            quiver.name = WornQuiverName;
+            quiver.transform.localPosition = entry.FindPropertyRelative("localPosition").vector3Value;
+            quiver.transform.localEulerAngles = entry.FindPropertyRelative("localEulerAngles").vector3Value;
+            Object.DestroyImmediate(quiver.GetComponent<MultiplayerARPG.QuiverArrows>());
+        }
+
+        /// <summary>
+        /// `SheathBack` under `spine_03` of the model nested in an entity, posed as
+        /// `DemoSheathBuilder` measures it on a scratch copy of the same body.
+        /// </summary>
+        private static Transform MakeBackSocket(GameObject modelInstance, string modelPath)
+        {
+            Transform spine = FindChild(modelInstance.transform, "spine_03");
+            var source = AssetDatabase.LoadAssetAtPath<GameObject>(modelPath);
+            if (spine == null || source == null)
+                return null;
+            var scratch = (GameObject)Object.Instantiate(source);
+            try
+            {
+                EquipmentContainer measured = DemoSheathBuilder.BackContainer(scratch, Socket(scratch, DemoItemBuilder.SocketRightHand));
+                if (measured == null || measured.transform == null)
+                    return null;
+                var socket = new GameObject(DemoSheathBuilder.SocketBack).transform;
+                socket.SetParent(spine, false);
+                socket.localPosition = measured.transform.localPosition;
+                socket.localRotation = measured.transform.localRotation;
+                return socket;
+            }
+            finally
+            {
+                Object.DestroyImmediate(scratch);
+            }
+        }
+
+        private static Transform FindChild(Transform root, string name)
+        {
+            foreach (Transform t in root.GetComponentsInChildren<Transform>(true))
+            {
+                if (t.name == name)
+                    return t;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Gives the archers their quiver, and touches nothing else - for `Build Quiver`, so the
+        /// whole entity chain (which rebuilds the player bodies and wants `Wire Game Database` after)
+        /// need not be run for it. Safe to repeat: the old quiver is replaced. Returns how many
+        /// entities it changed.
+        /// </summary>
+        internal static int WearArcherQuivers()
+        {
+            int changed = 0;
+            foreach (string gender in new[] { "Male", "Female" })
+            {
+                string path = $"{EntityDir}/DemoBanditArcher{gender}.prefab";
+                string modelPath = $"{ModelDir}/BanditArcherModel_{gender}.prefab";
+                if (AssetDatabase.LoadAssetAtPath<GameObject>(path) == null)
+                    continue;
+                GameObject root = PrefabUtility.LoadPrefabContents(path);
+                try
+                {
+                    Transform model = root.transform.Find("Model");
+                    BaseItem item = AssetDatabase.LoadAssetAtPath<BaseItem>(
+                        $"Assets/OpenMMORPG/Demo/GameData/Resources/Items/{DemoDatabaseWiring.MonsterWeapon("BanditArcher")}.asset");
+                    if (model == null || item == null)
+                        continue;
+                    WearQuiver(model.gameObject, modelPath, item);
+                    PrefabUtility.SaveAsPrefabAsset(root, path);
+                    ++changed;
+                }
+                finally
+                {
+                    PrefabUtility.UnloadPrefabContents(root);
+                }
+            }
+            return changed;
         }
 
         /// <summary>
@@ -540,7 +808,7 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// plane. Also given to the horse, so a mount ridden into the sea floats rather
         /// than sinks. The kit holds the capsule 0.75 of its height under the surface,
         /// which is right for treading water and wrong for the demo's flat swim clips, so
-        /// <see cref="DemoSurfaceSwimmer"/> lifts the model to <paramref name="depthBelowSurface"/>
+        /// <see cref="SurfaceSwimmer"/> lifts the model to <paramref name="depthBelowSurface"/>
         /// while swimming: near the surface for a body lying flat, deeper for the horse.
         /// </summary>
         internal static void SwimOnSurface(GameObject entity, float depthBelowSurface = 0.15f)
@@ -555,10 +823,84 @@ namespace MultiplayerARPG.Demo.EditorTools
             serialized.FindProperty("autoSwimToSurface").boolValue = true;
             serialized.ApplyModifiedPropertiesWithoutUndo();
 
-            var swimmer = entity.GetComponent<MultiplayerARPG.Demo.DemoSurfaceSwimmer>();
+            var swimmer = entity.GetComponent<MultiplayerARPG.SurfaceSwimmer>();
             if (swimmer == null)
-                swimmer = entity.AddComponent<MultiplayerARPG.Demo.DemoSurfaceSwimmer>();
+                swimmer = entity.AddComponent<MultiplayerARPG.SurfaceSwimmer>();
             swimmer.depthBelowSurface = depthBelowSurface;
+        }
+
+        /// <summary>
+        /// Players get <see cref="MultiplayerARPG.AirborneSnapGuard"/>: the template's
+        /// ground snap (2 m) is as long as a jump is high (2 m), so on the island's terrain every
+        /// jump was pulled to the ground from its apex in a single frame. Idempotent; also what
+        /// the one-off pass over already-built player prefabs calls.
+        /// </summary>
+        internal static void GuardJumpsFromSnapping(GameObject entity)
+        {
+            if (entity.GetComponent<MultiplayerARPG.AirborneSnapGuard>() != null)
+                return;
+            if (entity.GetComponent<CharacterControllerEntityMovement>() == null)
+            {
+                Debug.LogError($"[{nameof(DemoEntityBuilder)}] {entity.name} has no CharacterControllerEntityMovement for the airborne snap guard to watch.");
+                return;
+            }
+            entity.AddComponent<MultiplayerARPG.AirborneSnapGuard>();
+        }
+
+        /// <summary>
+        /// Players get <see cref="MultiplayerARPG.PlayerCharacterInteractionComponent"/>, the
+        /// player's own channel to the server for the village doors and the treasure chests'
+        /// lids, so every player sees the same door open and the same chest being looted. A
+        /// network behaviour, so it has to be on the prefab both the server and the clients
+        /// spawn, not added at runtime. Idempotent; also what the one-off pass over
+        /// already-built player prefabs calls.
+        /// </summary>
+        internal static void GiveInteraction(GameObject entity)
+        {
+            if (entity.GetComponent<MultiplayerARPG.PlayerCharacterInteractionComponent>() == null)
+                entity.AddComponent<MultiplayerARPG.PlayerCharacterInteractionComponent>();
+        }
+
+        /// <summary>
+        /// The dash (Q): how fast it leaves and how hard it slows, in m/s and m/s².
+        ///
+        /// The kit drops the force once it has slowed below run speed (4 m/s), so it lasts
+        /// <c>(speed - 4) / deceleration</c> seconds and covers <c>(speed² - 16) / (2 × deceleration)</c>
+        /// metres. The template shipped 20 and 20: 9.6 m in 0.8 s, a launch, and over long before
+        /// the 1.47 s `Roll` it plays - measured in the harness (2026-10-04), a dash from standing
+        /// then froze on the spot for the rest of the roll, and one from a run carried on at run
+        /// speed with the legs still in the roll's get-up. These carry the character for the whole
+        /// roll - the dive is over at 0.7 s and the body is standing again at about 1.25 - and let
+        /// go at run speed, so a held key runs straight on: 7.5 m in 1.25 s.
+        /// </summary>
+        private const float DashSpeed = 8f;
+        private const float DashDeceleration = 3.2f;
+
+        /// <summary>
+        /// Players' crouch rates across and back (see `DemoAnimationSet.CrouchMoves`, which plays
+        /// each crouch clip at the pace these give) and their dash. Both sit on the movement
+        /// component, so they are written here rather than with the animations. Idempotent; also
+        /// what `Refresh Crouch And Dash` calls on the player prefabs already built.
+        /// </summary>
+        internal static bool WriteCrouchAndDash(GameObject entity)
+        {
+            var movement = entity.GetComponent<CharacterControllerEntityMovement>();
+            if (movement == null)
+            {
+                Debug.LogError($"[{nameof(DemoEntityBuilder)}] {entity.name} has no CharacterControllerEntityMovement to set crouch and dash on.");
+                return false;
+            }
+            var serialized = new SerializedObject(movement);
+            serialized.FindProperty("crouchForwardMoveSpeedRate").floatValue = 1f;
+            serialized.FindProperty("crouchForwardSideMoveSpeedRate").floatValue = 1f;
+            serialized.FindProperty("crouchSideMoveSpeedRate").floatValue = DemoAnimationSet.CrouchSideMoveSpeedRate;
+            serialized.FindProperty("crouchBackwardSideMoveSpeedRate").floatValue = DemoAnimationSet.CrouchBackMoveSpeedRate;
+            serialized.FindProperty("crouchBackwardMoveSpeedRate").floatValue = DemoAnimationSet.CrouchBackMoveSpeedRate;
+            serialized.FindProperty("dashingForceApplier.speed").floatValue = DashSpeed;
+            serialized.FindProperty("dashingForceApplier.deceleration").floatValue = DashDeceleration;
+            serialized.FindProperty("dashingForceApplier.duration").floatValue = 0f;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            return true;
         }
 
         private static void Build(string templatePath, string modelPath, string outputPath, string monsterData = null, string title = null, float scale = 1f)
@@ -611,15 +953,31 @@ namespace MultiplayerARPG.Demo.EditorTools
             CharacterModelManager manager = entity.GetComponent<CharacterModelManager>();
             manager.MainTpsModel = modelInstance.GetComponent<PlayableCharacterModel>();
 
+            if (monsterData != null)
+                ArmMonster(modelInstance, modelPath, monsterData);
+
             // Players can climb: the watchtower's ladder is there to show that they can.
             // The kit's template entity does not carry the ladder component - climbing is
             // opt-in - and the entity finds it with GetComponent, so being present is all
             // it takes; the network identity gathers its behaviours when it starts.
-            if (monsterData == null && entity.GetComponent<CharacterLadderComponent>() == null)
-                entity.AddComponent<CharacterLadderComponent>();
+            if (monsterData == null)
+                GiveLadderComponent(entity);
 
             if (monsterData == null)
                 SwimOnSurface(entity);
+
+            // Boot prints on the beach and splashes in the sea. A no-op until Build Footstep Effects has
+            // made the hub it draws with (and that step wires the built entities itself).
+            DemoSkillEffectBuilder.WireFootstepEffects(entity);
+
+            if (monsterData == null)
+                GuardJumpsFromSnapping(entity);
+
+            if (monsterData == null)
+                GiveInteraction(entity);
+
+            if (monsterData == null)
+                WriteCrouchAndDash(entity);
 
             if (monsterData == null)
                 AddChargeHandler(entity);
@@ -663,6 +1021,17 @@ namespace MultiplayerARPG.Demo.EditorTools
                     // The body lies there as long as its loot does - see CorpseLifetime.
                     serialized.FindProperty("destroyDelay").floatValue = CorpseLifetime;
                     serialized.FindProperty("destroyRespawnDelay").floatValue = RespawnAfterBody;
+                    serialized.ApplyModifiedPropertiesWithoutUndo();
+                }
+                var activity = GiveSight(entity);
+                if (activity == null)
+                {
+                    Debug.LogError($"[{nameof(DemoEntityBuilder)}] {outputPath} has no MonsterActivityComponent, so its chase cannot be set.");
+                }
+                else
+                {
+                    var serialized = new SerializedObject(activity);
+                    serialized.FindProperty("followTargetDuration").floatValue = ChaseSeconds;
                     serialized.ApplyModifiedPropertiesWithoutUndo();
                 }
             }

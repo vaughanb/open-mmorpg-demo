@@ -131,6 +131,27 @@ namespace MultiplayerARPG.Demo.EditorTools
             /// <see cref="GraftWardrobe"/> and DemoBodyPartBuilder.
             /// </summary>
             public bool Selectable;
+            /// <summary>
+            /// The weapon type this body always fights with, by asset name: an enemy's. Its
+            /// default animations become that weapon's - see
+            /// <see cref="DemoAnimationSet.BuildDefault(WeaponType)"/> for why a monster has no
+            /// other way to swing one - and `DemoEntityBuilder` puts the weapon itself in its
+            /// hand. Empty for anyone who fights bare-handed or equips a weapon as a player does.
+            /// </summary>
+            public string Wields;
+            /// <summary>
+            /// Fights with spells rather than with what it wields: its basic attack is a cast
+            /// (<see cref="DemoAnimationSet.CasterAttack"/>) and the monster throws a missile from
+            /// it, while the stance and gaits stay the weapon's. The cultists, since 2026-10-05 -
+            /// in wizard's robes with a staff they swung it like a club.
+            /// </summary>
+            public bool Casts;
+            /// <summary>
+            /// The outfit's colours, if not its own: a recoloured copy of the outfit's material made by
+            /// <see cref="DemoOutfitPaletteBuilder"/>, for an enemy that wears a class's armour and should
+            /// not look like a player in it. Empty wears the outfit as the players do.
+            /// </summary>
+            public string Palette;
         }
 
         private static readonly Variant[] Variants =
@@ -139,17 +160,26 @@ namespace MultiplayerARPG.Demo.EditorTools
             new Variant { Name = "PlayerCharacterModel_Female", Gender = "Female", Selectable = true },
             new Variant { Name = "VillagerModel_Male", Gender = "Male", Outfit = "Peasant", Hair = "Hair_SimpleParted" },
             new Variant { Name = "VillagerModel_Female", Gender = "Female", Outfit = "Peasant", Hair = "Hair_Long" },
-            new Variant { Name = "BanditModel_Male", Gender = "Male", Outfit = "Ranger" },
-            new Variant { Name = "BanditModel_Female", Gender = "Female", Outfit = "Ranger" },
+            // Each enemy family fights with the weapon it carries - see Wields - and the
+            // weapon is the one in its MonsterSpec in DemoDatabaseWiring, which
+            // DemoEntityBuilder checks against the type here.
+            // The bandits wear the ranger's leathers, dyed black (2026-10-05): in the ranger's own green
+            // a bandit looked exactly like a player ranger. What they drop is still the green set.
+            new Variant { Name = "BanditModel_Male", Gender = "Male", Outfit = "Ranger", Wields = "Axe", Palette = DemoOutfitPaletteBuilder.Bandit },
+            new Variant { Name = "BanditModel_Female", Gender = "Female", Outfit = "Ranger", Wields = "Axe", Palette = DemoOutfitPaletteBuilder.Bandit },
+            // The bandits' archers: the same leathers, with the hunting bow they drop.
+            new Variant { Name = "BanditArcherModel_Male", Gender = "Male", Outfit = "Ranger", Wields = "Bow", Palette = DemoOutfitPaletteBuilder.Bandit },
+            new Variant { Name = "BanditArcherModel_Female", Gender = "Female", Outfit = "Ranger", Wields = "Bow", Palette = DemoOutfitPaletteBuilder.Bandit },
 
             // The marauders wear the knight plate and the cultists the wizard robes, so
             // that what a player takes off a corpse is what they watched it wearing.
-            new Variant { Name = "MarauderModel_Male", Gender = "Male", Outfit = "Knight",
+            new Variant { Name = "MarauderModel_Male", Gender = "Male", Outfit = "Knight", Wields = "Sword",
                 Parts = new[] { "Body_Armor", "Arms", "Legs_Armor", "Feet_Armor", "Acc_Pauldron_Round", "Acc_Scarf", "Head_Armet" } },
-            new Variant { Name = "MarauderModel_Female", Gender = "Female", Outfit = "Knight",
+            new Variant { Name = "MarauderModel_Female", Gender = "Female", Outfit = "Knight", Wields = "Sword",
                 Parts = new[] { "Body_Armor", "Arms", "Legs_Armor", "Feet_Armor", "Acc_Pauldrons_Round", "Acc_Scarf", "Head_Armet" } },
-            new Variant { Name = "CultistModel_Male", Gender = "Male", Outfit = "Wizard", Hair = "Hair_SimpleParted" },
-            new Variant { Name = "CultistModel_Female", Gender = "Female", Outfit = "Wizard", Hair = "Hair_Long" },
+            // The cultists cast (see Casts). The Hierophant is the male body scaled up, so he does too.
+            new Variant { Name = "CultistModel_Male", Gender = "Male", Outfit = "Wizard", Hair = "Hair_SimpleParted", Wields = "Staff", Casts = true },
+            new Variant { Name = "CultistModel_Female", Gender = "Female", Outfit = "Wizard", Hair = "Hair_Long", Wields = "Staff", Casts = true },
 
             // The two outfits no enemy wears go to the townsfolk who are not peasants: the
             // elder in noble dress and the keeper of the strongbox in a warden's tabard.
@@ -175,6 +205,31 @@ namespace MultiplayerARPG.Demo.EditorTools
             new Variant { Name = "SmithModel_Male", Gender = "Male", Outfit = "Peasant", Hair = "Hair_Buzzed",
                 Parts = new[] { "Body", "Legs", "Feet" }, Bare = new[] { "Arms" } },
         };
+
+        /// <summary>
+        /// The weapon type a model always fights with (see <see cref="Variant.Wields"/>), or
+        /// null. By model name, for the builders that meet the model rather than its variant.
+        /// </summary>
+        public static string Wields(string modelName)
+        {
+            foreach (Variant variant in Variants)
+            {
+                if (variant.Name == modelName)
+                    return string.IsNullOrEmpty(variant.Wields) ? null : variant.Wields;
+            }
+            return null;
+        }
+
+        /// <summary>Whether a model's basic attack is a spell (see <see cref="Variant.Casts"/>). By model name, like <see cref="Wields"/>.</summary>
+        public static bool Casts(string modelName)
+        {
+            foreach (Variant variant in Variants)
+            {
+                if (variant.Name == modelName)
+                    return variant.Casts;
+            }
+            return false;
+        }
 
         /// <summary>
         /// Re-applies the per-skill clips to every character model, and touches nothing else.
@@ -228,9 +283,11 @@ namespace MultiplayerARPG.Demo.EditorTools
         ///
         /// Written for the staff becoming a melee weapon (2026-09-23): a new swing without
         /// `Build Character Models` and the entity chain behind it. Only each weapon set's
-        /// right- and left-hand attack arrays are replaced, from the same
-        /// `DemoAnimationSet.BuildWeaponAnimations` the full build uses, so idles, moves and
-        /// anything a later pass has set on a model are left as they are. Bows are skipped:
+        /// right- and left-hand attack arrays are replaced - and an enemy's default attack,
+        /// which is its weapon's - from the same `DemoAnimationSet.BuildWeaponAnimations` the
+        /// full build uses, so idles, moves and anything a later pass has set on a model are
+        /// left as they are. A weapon type a model has no set for yet gets its full set added.
+        /// Bows are skipped:
         /// their attack depends on whether that character can charge a shot, which only the
         /// full build knows.
         /// </summary>
@@ -257,12 +314,39 @@ namespace MultiplayerARPG.Demo.EditorTools
                     var model = root.GetComponent<PlayableCharacterModel>();
                     WeaponAnimations[] sets = model.weaponAnimations;
                     bool changed = false;
+                    var present = new System.Collections.Generic.HashSet<WeaponType>();
                     for (int i = 0; i < sets.Length; ++i)
                     {
+                        if (sets[i].weaponType != null)
+                            present.Add(sets[i].weaponType);
                         if (sets[i].weaponType == null || !fresh.TryGetValue(sets[i].weaponType, out WeaponAnimations built))
                             continue;
                         sets[i].rightHandAttackAnimations = built.rightHandAttackAnimations;
                         sets[i].leftHandAttackAnimations = built.leftHandAttackAnimations;
+                        changed = true;
+                    }
+                    // A weapon type the model has no set for at all - the pickaxe, added
+                    // 2026-09-25 - gets its whole set, idles and moves included, as the full build
+                    // would give it. Without one the kit falls back to the default set, which is
+                    // empty-handed: the tool would be swung as a punch.
+                    var added = new System.Collections.Generic.List<WeaponAnimations>(sets);
+                    foreach (WeaponAnimations built in fresh.Values)
+                    {
+                        if (present.Contains(built.weaponType))
+                            continue;
+                        added.Add(built);
+                        changed = true;
+                    }
+                    sets = added.ToArray();
+                    // An enemy's default set is its weapon's (see Variant.Wields), and the
+                    // default set is the only one a monster plays, so its swing goes there too -
+                    // or its cast, for one that casts (Variant.Casts).
+                    WeaponType wields = DemoAnimationSet.WeaponTypeNamed(Wields(root.name));
+                    if (wields != null && fresh.TryGetValue(wields, out WeaponAnimations held))
+                    {
+                        model.defaultAnimations.rightHandAttackAnimations = Casts(root.name)
+                            ? DemoAnimationSet.BuildDefault(wields, true).rightHandAttackAnimations
+                            : held.rightHandAttackAnimations;
                         changed = true;
                     }
                     if (!changed)
@@ -282,6 +366,184 @@ namespace MultiplayerARPG.Demo.EditorTools
                       "Run Collect Demo Art after, so any newly used library clip is extracted into the demo.");
         }
 
+        /// <summary>
+        /// Puts the action masks on every character model already built, and touches nothing
+        /// else - the same bargain as <see cref="RefreshSkillAnimations"/>, for which clips play
+        /// on the whole body and which on the upper body only (see
+        /// <see cref="DemoAnimationSet.UpperBodyMask"/>).
+        ///
+        /// It patches the data on each model rather than rebuilding it, through the same
+        /// `DemoAnimationSet.ApplyMasks` the generators call, so the two cannot disagree - and so
+        /// it is idempotent, and a mask set by hand on a state is left as it is. Only the
+        /// humanoids are visited; the animals have their own sets on rigs a humanoid mask means
+        /// nothing to.
+        /// </summary>
+        [MenuItem("Open MMORPG/Demo/Refresh Action Masks")]
+        public static void RefreshActionMasks()
+        {
+            int refreshed = 0;
+            foreach (string guid in AssetDatabase.FindAssets("t:Prefab", new[] { ModelOutDir }))
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guid);
+                var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
+                var existing = prefab != null ? prefab.GetComponent<PlayableCharacterModel>() : null;
+                if (existing == null || existing.skillAnimations == null || existing.skillAnimations.Length == 0)
+                    continue;
+                GameObject root = PrefabUtility.LoadPrefabContents(path);
+                try
+                {
+                    var model = root.GetComponent<PlayableCharacterModel>();
+                    DemoAnimationSet.ApplyMasks(model.defaultAnimations);
+                    if (model.weaponAnimations != null)
+                    {
+                        foreach (WeaponAnimations set in model.weaponAnimations)
+                            DemoAnimationSet.ApplyMasks(set);
+                    }
+                    foreach (SkillAnimations skill in model.skillAnimations)
+                        DemoAnimationSet.ApplyMasks(skill);
+                    PrefabUtility.SaveAsPrefabAsset(root, path);
+                    ++refreshed;
+                }
+                finally
+                {
+                    PrefabUtility.UnloadPrefabContents(root);
+                }
+            }
+            AssetDatabase.SaveAssets();
+            Debug.Log($"[{nameof(DemoCharacterBuilder)}] Applied the action masks to {refreshed} character model(s).");
+        }
+
+        /// <summary>
+        /// Re-applies crouching and the dash wherever they live, and touches nothing else - the
+        /// same bargain as <see cref="RefreshSkillAnimations"/>. The kit spreads them over three
+        /// places: the crouch walk's clips and their per-direction rates are on the character
+        /// models, the crouch's rates across and back and the dash's force are on the player
+        /// entities' movement, and the crouch's speed is on the gameplay rule. Each is written by
+        /// the method the full build uses - `DemoAnimationSet.CrouchMoves`,
+        /// `DemoEntityBuilder.WriteCrouchAndDash`, `DemoDatabaseWiring.WriteCrouchSpeed` - so the
+        /// two cannot disagree. The dash's clip (`Roll`) needed no change and is left alone.
+        ///
+        /// A weapon set's crouch is replaced only where it has one; a set without one falls back
+        /// to the default set's, which is replaced here. Only the humanoids are visited.
+        /// </summary>
+        [MenuItem("Open MMORPG/Demo/Refresh Crouch And Dash")]
+        public static void RefreshCrouchAndDash()
+        {
+            int models = 0;
+            foreach (string guid in AssetDatabase.FindAssets("t:Prefab", new[] { ModelOutDir }))
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guid);
+                var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
+                var existing = prefab != null ? prefab.GetComponent<PlayableCharacterModel>() : null;
+                if (existing == null || existing.skillAnimations == null || existing.skillAnimations.Length == 0)
+                    continue;
+                GameObject root = PrefabUtility.LoadPrefabContents(path);
+                try
+                {
+                    var model = root.GetComponent<PlayableCharacterModel>();
+                    model.defaultAnimations.crouchMoveStates = DemoAnimationSet.CrouchMoves();
+                    if (model.weaponAnimations != null)
+                    {
+                        foreach (WeaponAnimations set in model.weaponAnimations)
+                        {
+                            if (set.crouchMoveStates != null && set.crouchMoveStates.forwardState != null &&
+                                set.crouchMoveStates.forwardState.clip != null)
+                                set.crouchMoveStates = DemoAnimationSet.CrouchMoves();
+                        }
+                    }
+                    PrefabUtility.SaveAsPrefabAsset(root, path);
+                    ++models;
+                }
+                finally
+                {
+                    PrefabUtility.UnloadPrefabContents(root);
+                }
+            }
+
+            int players = 0;
+            foreach (string body in DemoEntityBuilder.PlayerBodies)
+            {
+                string path = DemoEntityBuilder.PlayerEntityPath(body);
+                if (AssetDatabase.LoadAssetAtPath<GameObject>(path) == null)
+                {
+                    Debug.LogError($"[{nameof(DemoCharacterBuilder)}] No player entity at \"{path}\"; its crouch and dash were not written.");
+                    continue;
+                }
+                GameObject root = PrefabUtility.LoadPrefabContents(path);
+                try
+                {
+                    if (DemoEntityBuilder.WriteCrouchAndDash(root))
+                    {
+                        PrefabUtility.SaveAsPrefabAsset(root, path);
+                        ++players;
+                    }
+                }
+                finally
+                {
+                    PrefabUtility.UnloadPrefabContents(root);
+                }
+            }
+
+            DemoDatabaseWiring.WriteCrouchSpeed();
+            AssetDatabase.SaveAssets();
+            Debug.Log($"[{nameof(DemoCharacterBuilder)}] Refreshed the crouch walk on {models} character model(s), crouch and dash " +
+                      $"on {players} player entit{(players == 1 ? "y" : "ies")}, and the crouch speed on the gameplay rule. " +
+                      "Build Map Server after: the server build carries its own copy of the prefabs and the rule.");
+        }
+
+        /// <summary>
+        /// Points every character model at the user's `Jog_Fwd` where it still plays the library's
+        /// `Jog_Fwd_Loop` - the same bargain as <see cref="RefreshCrouchAndDash"/>: nothing else on the
+        /// models is touched, so a hand edit survives. Done as a swap of the clip *reference* wherever one
+        /// occurs rather than a rewrite of the jog set, so the default set, every weapon set and each state's
+        /// own speed rate stay as they were. Idempotent: a model with none left is not saved.
+        /// </summary>
+        [MenuItem("Open MMORPG/Demo/Refresh Jog")]
+        public static void RefreshJog()
+        {
+            AnimationClip from = DemoAnimationSet.Clip(DemoAnimationSet.LegacyJogForwardClip);
+            AnimationClip to = DemoAnimationSet.Clip(DemoAnimationSet.JogForwardClip);
+            if (from == null || to == null)
+                return;
+
+            int models = 0, references = 0;
+            foreach (string guid in AssetDatabase.FindAssets("t:Prefab", new[] { ModelOutDir }))
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guid);
+                var existing = AssetDatabase.LoadAssetAtPath<GameObject>(path);
+                if (existing == null || existing.GetComponent<PlayableCharacterModel>() == null)
+                    continue;
+                GameObject root = PrefabUtility.LoadPrefabContents(path);
+                try
+                {
+                    var serialized = new SerializedObject(root.GetComponent<PlayableCharacterModel>());
+                    int swapped = 0;
+                    SerializedProperty property = serialized.GetIterator();
+                    while (property.Next(true))
+                    {
+                        if (property.propertyType != SerializedPropertyType.ObjectReference ||
+                            property.objectReferenceValue != from)
+                            continue;
+                        property.objectReferenceValue = to;
+                        ++swapped;
+                    }
+                    if (swapped == 0)
+                        continue;
+                    serialized.ApplyModifiedPropertiesWithoutUndo();
+                    PrefabUtility.SaveAsPrefabAsset(root, path);
+                    ++models;
+                    references += swapped;
+                }
+                finally
+                {
+                    PrefabUtility.UnloadPrefabContents(root);
+                }
+            }
+            AssetDatabase.SaveAssets();
+            Debug.Log($"[{nameof(DemoCharacterBuilder)}] Swapped {references} reference(s) to {from.name} for {to.name} on " +
+                      $"{models} character model(s). Build Map Server after: the server build carries its own copy of the prefabs.");
+        }
+
         [MenuItem("Open MMORPG/Demo/Build Character Models")]
         public static void BuildAll()
         {
@@ -290,11 +552,63 @@ namespace MultiplayerARPG.Demo.EditorTools
             // the right loop flag - see DemoAnimationSet.MustLoop for the one that does not.
             DemoAnimationSet.EnsureLooping();
             DemoAnimationSet.EnsureTrimmedClips();
+            DemoAnimationSet.EnsureGrounded();
             ShowBothSidesOfCloth();
-            foreach (Variant variant in Variants)
-                Build(variant);
+            // Once for the whole run, as Refresh Skill Animations does: building the table
+            // regenerates Volley's high-angle clips and rescans every clip in the demo and both
+            // libraries, and doing that per variant did it sixteen times to the same result.
+            _skillAnimations = DemoAnimationSet.BuildSkillAnimations();
+            try
+            {
+                foreach (Variant variant in Variants)
+                    Build(variant);
+            }
+            finally
+            {
+                _skillAnimations = null;
+            }
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();
+        }
+
+        /// <summary>The skill table for the run in progress; see <see cref="BuildAll"/>.</summary>
+        private static SkillAnimations[] _skillAnimations;
+
+        /// <summary>
+        /// Puts each variant's <see cref="Variant.Palette"/> on its built model and changes nothing else -
+        /// for `Build Bandit Colours`, so the models need not be rebuilt (which would want the entity chain
+        /// after). The entities nest the models, so they follow. <paramref name="regenerate"/> recolours
+        /// each palette's texture once, over what is there. Returns how many models it changed.
+        /// </summary>
+        internal static int ApplyPalettes(bool regenerate)
+        {
+            var regenerated = new HashSet<string>();
+            int changed = 0;
+            foreach (Variant variant in Variants)
+            {
+                if (string.IsNullOrEmpty(variant.Palette))
+                    continue;
+                if (regenerate && regenerated.Add($"{variant.Outfit}/{variant.Palette}"))
+                    DemoOutfitPaletteBuilder.MaterialFor(variant.Outfit, variant.Palette, true);
+                string path = $"{ModelOutDir}/{variant.Name}.prefab";
+                if (AssetDatabase.LoadAssetAtPath<GameObject>(path) == null)
+                    continue;
+                GameObject root = PrefabUtility.LoadPrefabContents(path);
+                try
+                {
+                    if (DemoOutfitPaletteBuilder.Apply(root, variant.Outfit, variant.Palette) > 0)
+                    {
+                        PrefabUtility.SaveAsPrefabAsset(root, path);
+                        ++changed;
+                    }
+                }
+                finally
+                {
+                    PrefabUtility.UnloadPrefabContents(root);
+                }
+            }
+            AssetDatabase.SaveAssets();
+            return changed;
         }
 
         private static void Build(Variant variant)
@@ -370,6 +684,8 @@ namespace MultiplayerARPG.Demo.EditorTools
             }
 
             TintHair(root);
+            if (!string.IsNullOrEmpty(variant.Palette))
+                DemoOutfitPaletteBuilder.Apply(root, variant.Outfit, variant.Palette);
 
             Animator animator = root.GetComponent<Animator>();
             if (animator == null)
@@ -381,24 +697,31 @@ namespace MultiplayerARPG.Demo.EditorTools
             animator.cullingMode = AnimatorCullingMode.AlwaysAnimate;
 
             // The demo's own subclass, so that the copy of this body that rides the horse
-            // dresses itself - see DemoCharacterModel and DemoMountBuilder.BuildRider.
+            // dresses itself - see SeatAwarePlayableCharacterModel and DemoMountBuilder.BuildRider.
             PlayableCharacterModel model = EnsureDemoCharacterModel(root);
             model.animator = animator;
             // The bone map for equipment is read off this renderer, so it has to be one
             // carrying the full skeleton rather than, say, the eyes. A baked outfit has
             // no bare torso, so fall back to the head, which carries the same skeleton.
             model.skinnedMeshRenderer = equipmentDriven ? FindRenderer(root, "BareBody") : reference;
-            model.defaultAnimations = DemoAnimationSet.BuildDefault();
+            model.defaultAnimations = DemoAnimationSet.BuildDefault(DemoAnimationSet.WeaponTypeNamed(variant.Wields), variant.Casts);
             // Only players can hold a shot: charging comes from the player controller, so a
             // monster's bow has to be wired to fire in one go instead.
             model.weaponAnimations = DemoAnimationSet.BuildWeaponAnimations(equipmentDriven);
             // Per-skill clips. Without these every skill in the game animates as the
             // unarmed set's spell cast - see BuildSkillAnimations for why the weapon set
             // is not the fallback it looks like it should be.
-            model.skillAnimations = DemoAnimationSet.BuildSkillAnimations();
+            model.skillAnimations = _skillAnimations ?? DemoAnimationSet.BuildSkillAnimations();
 
             model.EquipmentContainers = BuildContainers(root, bones, bareParts, equipmentDriven, hair, wardrobe);
             model.EffectContainers = BuildEffectContainers(root, bones);
+
+            // Plants the feet on uneven ground; measured off the idle assigned above.
+            DemoFootIKBuilder.Ensure(root);
+            // Holds hands and feet to a ladder's rungs; needs nothing measured.
+            Animator rootAnimator = root.GetComponent<Animator>();
+            if (rootAnimator != null && rootAnimator.isHuman && root.GetComponent<MultiplayerARPG.LadderLimbIK>() == null)
+                root.AddComponent<MultiplayerARPG.LadderLimbIK>();
 
             WidenBounds(root);
 
@@ -784,6 +1107,20 @@ namespace MultiplayerARPG.Demo.EditorTools
                 transform = CreateSocket(root, bones, "hand_l", SocketLeftHand),
             });
 
+            // Where the weapons ride while they are put away. Only a body that changes its
+            // gear has anything to stow, and each socket is measured off the weapon socket of the
+            // hand that draws from it - the right for the sword's shoulder, the left for the bow's -
+            // so they have to come after those. See DemoSheathBuilder.
+            if (equipmentDriven)
+            {
+                EquipmentContainer back = DemoSheathBuilder.BackContainer(root, containers[containers.Count - 2].transform);
+                if (back != null)
+                    containers.Add(back);
+                EquipmentContainer backLeft = DemoSheathBuilder.BackLeftContainer(root, containers[containers.Count - (back != null ? 2 : 1)].transform);
+                if (backLeft != null)
+                    containers.Add(backLeft);
+            }
+
             return containers.ToArray();
         }
 
@@ -992,7 +1329,7 @@ namespace MultiplayerARPG.Demo.EditorTools
 
         /// <summary>
         /// The model prefab at <paramref name="modelPrefabPath"/> carries a
-        /// <see cref="DemoCharacterModel"/> afterwards. A prefab built before that class
+        /// <see cref="SeatAwarePlayableCharacterModel"/> afterwards. A prefab built before that class
         /// existed has a plain <see cref="PlayableCharacterModel"/>; its script is swapped in
         /// place, keeping the component's file id and every field, so nothing that points at
         /// it - the entity's model manager, the entity prefab's overrides - has to change.
@@ -1005,11 +1342,11 @@ namespace MultiplayerARPG.Demo.EditorTools
             GameObject contents = PrefabUtility.LoadPrefabContents(modelPrefabPath);
             try
             {
-                if (contents.GetComponent<DemoCharacterModel>() != null)
+                if (contents.GetComponent<SeatAwarePlayableCharacterModel>() != null)
                     return true;
                 EnsureDemoCharacterModel(contents);
                 PrefabUtility.SaveAsPrefabAsset(contents, modelPrefabPath);
-                Debug.Log($"[{nameof(DemoCharacterBuilder)}] \"{modelPrefabPath}\" now carries a {nameof(DemoCharacterModel)}.");
+                Debug.Log($"[{nameof(DemoCharacterBuilder)}] \"{modelPrefabPath}\" now carries a {nameof(SeatAwarePlayableCharacterModel)}.");
                 return true;
             }
             finally
@@ -1019,38 +1356,29 @@ namespace MultiplayerARPG.Demo.EditorTools
         }
 
         /// <summary>
-        /// The <see cref="DemoCharacterModel"/> on <paramref name="root"/>, added if there is
+        /// The <see cref="SeatAwarePlayableCharacterModel"/> on <paramref name="root"/>, added if there is
         /// no character model, or converted in place if there is a plain playable one.
         /// </summary>
-        private static DemoCharacterModel EnsureDemoCharacterModel(GameObject root)
+        private static SeatAwarePlayableCharacterModel EnsureDemoCharacterModel(GameObject root)
         {
-            var demoModel = root.GetComponent<DemoCharacterModel>();
+            var demoModel = root.GetComponent<SeatAwarePlayableCharacterModel>();
             if (demoModel != null)
                 return demoModel;
             var model = root.GetComponent<PlayableCharacterModel>();
             if (model == null)
-                return root.AddComponent<DemoCharacterModel>();
+                return root.AddComponent<SeatAwarePlayableCharacterModel>();
             // Same component, new script: the subclass adds no fields, so everything
             // serialized carries over, and the file id survives for whatever references it.
-            MonoScript script = null;
-            foreach (string guid in AssetDatabase.FindAssets($"t:MonoScript {nameof(DemoCharacterModel)}"))
-            {
-                var candidate = AssetDatabase.LoadAssetAtPath<MonoScript>(AssetDatabase.GUIDToAssetPath(guid));
-                if (candidate != null && candidate.GetClass() == typeof(DemoCharacterModel))
-                {
-                    script = candidate;
-                    break;
-                }
-            }
+            MonoScript script = DemoScriptAssets.Of(typeof(SeatAwarePlayableCharacterModel));
             if (script == null)
             {
-                Debug.LogError($"[{nameof(DemoCharacterBuilder)}] Cannot find the {nameof(DemoCharacterModel)} script asset.");
+                Debug.LogError($"[{nameof(DemoCharacterBuilder)}] Cannot find the {nameof(SeatAwarePlayableCharacterModel)} script asset.");
                 return null;
             }
             var serialized = new SerializedObject(model);
             serialized.FindProperty("m_Script").objectReferenceValue = script;
             serialized.ApplyModifiedPropertiesWithoutUndo();
-            return root.GetComponent<DemoCharacterModel>();
+            return root.GetComponent<SeatAwarePlayableCharacterModel>();
         }
 
         private static GameObject InstantiateUnpacked(string prefabPath)

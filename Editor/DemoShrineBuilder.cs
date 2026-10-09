@@ -263,8 +263,8 @@ namespace MultiplayerARPG.Demo.EditorTools
                 // Under the model rather than under `Structure`, so the fires ride with the
                 // stone when it settles onto the hill instead of staying where the flat
                 // prefab put them.
-                MultiplayerARPG.Demo.DemoTorch fire = DemoFlameBuilder.Light(
-                    FirePath, stone.transform, at, MultiplayerARPG.Demo.DemoTorch.Schedule.Always);
+                MultiplayerARPG.TimeOfDayLight fire = DemoFlameBuilder.Light(
+                    FirePath, stone.transform, at, MultiplayerARPG.TimeOfDayLight.Schedule.Always);
                 if (fire == null)
                     continue;
 

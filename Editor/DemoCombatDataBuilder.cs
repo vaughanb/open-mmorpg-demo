@@ -80,6 +80,11 @@ namespace MultiplayerARPG.Demo.EditorTools
             public float MoveSpeedRate;
             /// <summary>The skill that applies it, and at what level of itself.</summary>
             public string FromSkill;
+            /// <summary>
+            /// What whoever has it wears while it lasts, from DemoSkillEffectBuilder. Until 2026-09-25
+            /// none of the three showed on their victim at all.
+            /// </summary>
+            public string Effect;
         }
 
         /// <summary>
@@ -95,11 +100,11 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// </summary>
         private static readonly AilmentSpec[] Ailments =
         {
-            new AilmentSpec { Name = "Burning", Title = "Burning", Seconds = 6f, HpPerSecond = -7, FromSkill = "Meteor",
+            new AilmentSpec { Name = "Burning", Title = "Burning", Seconds = 6f, HpPerSecond = -7, FromSkill = "Meteor", Effect = "FX_Burning",
                 Description = "Still alight. It will go out on its own, eventually." },
-            new AilmentSpec { Name = "Chilled", Title = "Chilled", Seconds = 5f, MoveSpeedRate = -0.35f, FromSkill = "FrostNova",
+            new AilmentSpec { Name = "Chilled", Title = "Chilled", Seconds = 5f, MoveSpeedRate = -0.35f, FromSkill = "FrostNova", Effect = "FX_Chilled",
                 Description = "Slowed to a wade. Everything takes longer than it should." },
-            new AilmentSpec { Name = "Bleeding", Title = "Bleeding", Seconds = 8f, HpPerSecond = -5, FromSkill = "HuntersMark",
+            new AilmentSpec { Name = "Bleeding", Title = "Bleeding", Seconds = 8f, HpPerSecond = -5, FromSkill = "HuntersMark", Effect = "FX_Bleeding",
                 Description = "An arrow wound that will not close while you keep moving." },
         };
 
@@ -168,6 +173,21 @@ namespace MultiplayerARPG.Demo.EditorTools
                     new Bonus { Note = "four pieces", AtkSpeed = 0.1f, MoveSpeed = 0.4f },
                 },
             },
+            // The bandits' black copy of it (2026-10-05): the same shape, about three-quarters of
+            // each step, because the dropped set is meant to be a little worse than the made one
+            // (see DemoItemBuilder.BanditArmourGrade). A set of its own rather than a share of the
+            // ranger's, so a black piece does not complete a green set.
+            new SetSpec
+            {
+                Name = "BanditSet", Title = "Bandit's Blacks",
+                Pieces = new[] { "BanditHood", "BanditJerkin", "BanditBracers", "BanditBreeches", "BanditBoots", "BanditPauldron" },
+                Steps = new[]
+                {
+                    new Bonus { Note = "two pieces", MoveSpeed = 0.3f },
+                    new Bonus { Note = "three pieces", CriRate = 0.03f },
+                    new Bonus { Note = "four pieces", AtkSpeed = 0.07f, MoveSpeed = 0.3f },
+                },
+            },
             new SetSpec
             {
                 Name = "WizardSet", Title = "Wizard's Vestments",
@@ -183,14 +203,16 @@ namespace MultiplayerARPG.Demo.EditorTools
 
         /// <summary>
         /// Which skill deals which element. Everything not named here stays physical, which
-        /// includes every weapon, every monster and both the warrior's and the ranger's
-        /// lines - a cleave is a cleave.
+        /// includes every weapon, every monster but the casters and both the warrior's and the
+        /// ranger's lines - a cleave is a cleave. (The cultists' and the Hierophant's own bolts are
+        /// Fire too: `MonsterSpec.Element` in DemoDatabaseWiring.)
         /// </summary>
         private static readonly Dictionary<string, string> SkillElements = new Dictionary<string, string>
         {
             { "Meteor", Fire },
             { "FrostNova", Frost },
             { "UnholyNova", Fire },
+            { "WitheringHex", Fire },
         };
 
         [MenuItem("Open MMORPG/Demo/Build Combat Data (elements, ailments, sets)", priority = 157)]
@@ -245,6 +267,12 @@ namespace MultiplayerARPG.Demo.EditorTools
             SerializedProperty speed = serialized.FindProperty("buff.increaseStatsRate.baseStats.moveSpeed");
             if (speed != null)
                 speed.floatValue = spec.MoveSpeedRate;
+            // Written every time, empty or not, so taking one off the spec takes it off the asset.
+            SerializedProperty effects = serialized.FindProperty("buff.effects");
+            GameEffect effect = DemoSkillEffectBuilder.Effect(spec.Effect);
+            effects.arraySize = effect != null ? 1 : 0;
+            if (effect != null)
+                effects.GetArrayElementAtIndex(0).objectReferenceValue = effect;
             serialized.ApplyModifiedPropertiesWithoutUndo();
             EditorUtility.SetDirty(status);
         }
@@ -404,6 +432,11 @@ namespace MultiplayerARPG.Demo.EditorTools
                 }
                 var serialized = new SerializedObject(skill);
                 SerializedProperty element = serialized.FindProperty("damageAmount.damageElement");
+                // What it leaves burning is the same element as the blow (Withering Hex's curse), or
+                // the curse would fall back to Physical and armour would turn it like a sword.
+                SerializedProperty overTime = serialized.FindProperty("debuff.damageOverTimes");
+                for (int i = 0; overTime != null && i < overTime.arraySize; ++i)
+                    overTime.GetArrayElementAtIndex(i).FindPropertyRelative("damageElement").objectReferenceValue = Element(entry.Value);
                 if (element != null)
                 {
                     element.objectReferenceValue = Element(entry.Value);
@@ -474,7 +507,8 @@ namespace MultiplayerARPG.Demo.EditorTools
             EditorUtility.SetDirty(prefab);
         }
 
-        private static DamageElement Element(string name)
+        /// <summary>The element asset of that name, or null if Build Combat Data has not made it.</summary>
+        internal static DamageElement Element(string name)
         {
             return AssetDatabase.LoadAssetAtPath<DamageElement>($"{ElementDir}/{name}.asset");
         }

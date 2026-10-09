@@ -17,6 +17,8 @@ namespace MultiplayerARPG.Demo.EditorTools
     /// prototype prefab, and a capsule round the trunk is far cheaper than a mesh
     /// collider on a tree with foliage. Bushes get none, so the player can push through
     /// undergrowth rather than being fenced in by it.
+    ///
+    /// Trees and bushes get a LODGroup as well - see <see cref="AddLodGroup"/>.
     /// </summary>
     public static class DemoTreePrefabBuilder
     {
@@ -53,13 +55,16 @@ namespace MultiplayerARPG.Demo.EditorTools
         {
             DemoIslandBuilder.EnsureFolder(OutputDir);
             foreach (string name in Trees)
-                Build(name, true);
+                Build(name, true, true);
             foreach (string name in Bushes)
-                Build(name, false);
+                Build(name, false, true);
             foreach (string name in Details)
-                Build(name, false);
+                Build(name, false, false);
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();
+            // The tree materials switch to the wind shader here too, so the one step leaves the
+            // forest ready to blow. Idempotent, and a no-op for any material not collected yet.
+            DemoWindMaterials.Apply();
             Debug.Log($"[{nameof(DemoTreePrefabBuilder)}] Built {Trees.Length + Bushes.Length + Details.Length} terrain prefabs in {OutputDir}.");
         }
 
@@ -69,7 +74,9 @@ namespace MultiplayerARPG.Demo.EditorTools
             return AssetDatabase.LoadAssetAtPath<GameObject>($"{OutputDir}/{name}.prefab");
         }
 
-        private static void Build(string name, bool solid)
+        /// <param name="solid">Gets a trunk collider.</param>
+        /// <param name="tree">Drawn by the terrain as a tree rather than as detail.</param>
+        private static void Build(string name, bool solid, bool tree)
         {
             GameObject source = AssetDatabase.LoadAssetAtPath<GameObject>($"{SourceDir}/{name}.prefab");
             if (source == null)
@@ -87,7 +94,14 @@ namespace MultiplayerARPG.Demo.EditorTools
 
             var flattened = new GameObject(name);
             flattened.AddComponent<MeshFilter>().sharedMesh = sourceFilter.sharedMesh;
-            flattened.AddComponent<MeshRenderer>().sharedMaterials = sourceRenderer.sharedMaterials;
+            MeshRenderer renderer = flattened.AddComponent<MeshRenderer>();
+            renderer.sharedMaterials = sourceRenderer.sharedMaterials;
+            // Bushes and details are the small plants the wind treats softly and measures from the
+            // ground; the pack's own materials stay on the trees. See DemoWindMaterials.
+            if (!solid)
+                renderer.sharedMaterials = DemoWindMaterials.ForSmallPlant(renderer.sharedMaterials);
+            if (tree)
+                AddLodGroup(flattened, renderer);
 
             if (solid)
             {
@@ -101,6 +115,25 @@ namespace MultiplayerARPG.Demo.EditorTools
 
             PrefabUtility.SaveAsPrefabAsset(flattened, $"{OutputDir}/{name}.prefab");
             Object.DestroyImmediate(flattened);
+        }
+
+        /// <summary>
+        /// Gives a terrain tree one level of detail - its own renderer, never culled.
+        ///
+        /// The terrain checks a tree without a LODGroup for the built-in pipeline's Soft
+        /// Occlusion shaders, which it makes billboards with, and these are URP Lit, so the
+        /// island warned about each of them whenever it loaded fresh: "The tree Plant_1 must
+        /// use the Nature/Soft Occlusion shader", ten lines every Build Map Server. It was
+        /// only noise - the island never billboards (see DemoSceneBuilder.BuildTerrain) - but
+        /// a tree with a LODGroup is drawn from its levels and not checked at all. A threshold
+        /// of zero means the group never culls by size, so the terrain's tree distance still
+        /// decides how far the undergrowth carries, as it did before.
+        /// </summary>
+        private static void AddLodGroup(GameObject tree, Renderer renderer)
+        {
+            LODGroup group = tree.AddComponent<LODGroup>();
+            group.SetLODs(new[] { new LOD(0f, new Renderer[] { renderer }) });
+            group.RecalculateBounds();
         }
     }
 }

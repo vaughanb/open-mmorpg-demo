@@ -201,11 +201,12 @@ namespace MultiplayerARPG.Demo.EditorTools
             crossing.width = 0.9f;
             crossing.bidirectional = true;
 
-            var door = doorway.AddComponent<MultiplayerARPG.Demo.DemoDoor>();
+            var door = doorway.AddComponent<MultiplayerARPG.SceneryDoor>();
             door.pivot = hinge.transform;
             // The wall's local -Z faces into the house, and a positive turn carries the
             // leaf that way, so the door opens inward and away from whoever is arriving.
             door.openAngle = 100f;
+            DemoAudioWiring.WireDoor(door);
 
             // The handle goes on whatever owns the leaf's collider, which is not the leaf's
             // own root: the pack nests the mesh one level down under a child of the same
@@ -220,7 +221,7 @@ namespace MultiplayerARPG.Demo.EditorTools
                                "cannot be opened or walked into.");
                 return;
             }
-            var handle = leafCollider.gameObject.AddComponent<MultiplayerARPG.Demo.DemoDoorHandle>();
+            var handle = leafCollider.gameObject.AddComponent<MultiplayerARPG.SceneryDoorHandle>();
             handle.door = door;
         }
 

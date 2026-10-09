@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using Unity.AI.Navigation;
 using UnityEditor;
 using UnityEditor.SceneManagement;
@@ -43,19 +43,37 @@ namespace MultiplayerARPG.Demo.EditorTools
         public const string MapTitle = "Cultist Crypt";
 
         /// <summary>
-        /// Where a character coming down from the island arrives: on the landing at the
-        /// top of the stair, a pace in from the door, looking down into the crypt.
+        /// The landing's cells along z. Two deep since 2026-09-30: with one cell the door
+        /// wall stood 1.4 m behind a character who had just arrived facing the crypt, and
+        /// the camera's wall-hit spring held the lens in a close-up on the back of their
+        /// head (99 of 100 frames in the LAN harness). The second cell gives the camera
+        /// the landing to sit in. The south cell takes the door and the gate; the
+        /// arrival point stays at the stair head in the north cell.
         /// </summary>
-        public static readonly Vector3 ArrivalPosition = new Vector3(2f, Storey + 0.05f, -7.6f);
+        private const int LandingZ0 = -5, LandingZ1 = -4;
+
+        /// <summary>
+        /// Where a character coming down from the island arrives: on the landing at the
+        /// head of the stair, looking down into the crypt, with the whole depth of the
+        /// landing behind them for the camera. On the landing's midline, not the door's
+        /// cell: at x = 2 the character stood a metre from the west wall, and a camera
+        /// with any westward lean (a saved yaw, which the kit keeps across maps) was held
+        /// at 3 m by that wall. The gate is in the south-west cell, 3.5 m away, so the
+        /// arrival is still clear of its trigger.
+        /// </summary>
+        public static readonly Vector3 ArrivalPosition = new Vector3(3f, Storey + 0.05f, -7.6f);
         public const float ArrivalYaw = 0f;
 
         /// <summary>
         /// The way out: the gate stands in the landing's doorway, its trigger reaching a
         /// hand's width into the landing, so that walking into the dark beyond the door
         /// is what takes you up. It is placed clear of the arrival point, or a character
-        /// coming down would be sent straight back up.
+        /// coming down would be sent straight back up. The doorway is on the landing's
+        /// south cell line, so this is derived from <see cref="LandingZ0"/>; the warp
+        /// portal database reads it, and <c>Wire Game Database</c> must be rerun when it
+        /// moves.
         /// </summary>
-        public static readonly Vector3 ExitGatePosition = new Vector3(2f, Storey, -9.05f);
+        public static readonly Vector3 ExitGatePosition = new Vector3(2f, Storey, LandingZ0 * Cell - Cell * 0.5f - 0.05f);
         public const float ExitGateYaw = 0f;
 
         /// <summary>The gate's trigger: the width of a doorway, and no deeper than its jambs.</summary>
@@ -63,6 +81,17 @@ namespace MultiplayerARPG.Demo.EditorTools
 
         private const float Cell = DemoVillageBuilder.Cell;
         private const float Storey = DemoVillageBuilder.WallHeight;
+
+        /// <summary>
+        /// The ceiling of an ordinary room or passage. Not a storey: the camera decides
+        /// this. The gameplay camera starts 6 m behind a point 1.2 m up the character,
+        /// pitched 30 degrees, which puts the lens 4.2 m above the floor with a 0.3 m
+        /// probe sphere round it, so under a 3 m ceiling the wall-hit spring pulled it in
+        /// to half its distance everywhere but the sanctum and the crypt was played
+        /// through a keyhole. 5 m clears the default view with room to spare and keeps
+        /// the two-storey rooms the tall ones.
+        /// </summary>
+        private const float RoomCeiling = 5f;
 
         /// <summary>
         /// How far the thin side of a wall module stands inside the line it is placed on.
@@ -100,31 +129,36 @@ namespace MultiplayerARPG.Demo.EditorTools
             public Vector3 Centre { get { return new Vector3((MinX + MaxX) * 0.5f, Floor, (MinZ + MaxZ) * 0.5f); } }
         }
 
-        private static Room R(string name, int x0, int z0, int x1, int z1, float floor = 0f, float ceiling = Storey, string tile = "Floor_UnevenBrick")
+        private static Room R(string name, int x0, int z0, int x1, int z1, float floor = 0f, float ceiling = RoomCeiling, string tile = "Floor_UnevenBrick")
         {
             return new Room { Name = name, X0 = x0, Z0 = z0, X1 = x1, Z1 = z1, Floor = floor, Ceiling = ceiling, Tile = tile };
         }
 
         /// <summary>
         /// The rooms, in cells. Rooms wear the uneven brick underfoot and the passages the
-        /// dressed brick, so the change of floor says a passage has begun. The stairwell,
-        /// the landing and the sanctum are two storeys tall: the stair needs the headroom
-        /// and the sanctum is meant to feel like the one room that was built rather than dug.
+        /// dressed brick, so the change of floor says a passage has begun. Everything is
+        /// <see cref="RoomCeiling"/> high but the sanctum, which is two storeys and meant
+        /// to feel like the one room that was built rather than dug, and the stairwell
+        /// and landing, which are a storey taller again: the landing's floor is a storey
+        /// up, so its headroom is measured from there, and the stair that climbs to it
+        /// shares the shaft. Measured live, a landing a storey below its ceiling pushed
+        /// the camera in on three frames out of four, exactly as the old 3 m rooms did.
         /// </summary>
         private static readonly Room[] Rooms =
         {
-            // Two cells wide, though one stair would do: the third-person camera needs
-            // the room. In a passage one cell wide it is pushed in against the
-            // character's back, and the way in is the first thing a player sees.
-            R("Landing", 1, -4, 2, -4, Storey, Storey * 2f, "Floor_Brick"),
-            R("Stairwell", 1, -3, 2, -1, 0f, Storey * 2f, "Floor_Brick"),
+            // Two cells wide, though one stair would do, and two deep (LandingZ0..Z1):
+            // the third-person camera needs the room. In a passage one cell wide it is
+            // pushed in against the character's back, and the way in is the first thing
+            // a player sees.
+            R("Landing", 1, LandingZ0, 2, LandingZ1, Storey, Storey + RoomCeiling, "Floor_Brick"),
+            R("Stairwell", 1, -3, 2, -1, 0f, Storey + RoomCeiling, "Floor_Brick"),
             R("Antechamber", 0, 0, 3, 2),
-            R("GatePassage", 4, 0, 5, 1, 0f, Storey, "Floor_Brick"),
-            R("NorthPassage", 1, 3, 2, 4, 0f, Storey, "Floor_Brick"),
+            R("GatePassage", 4, 0, 5, 1, 0f, RoomCeiling, "Floor_Brick"),
+            R("NorthPassage", 1, 3, 2, 4, 0f, RoomCeiling, "Floor_Brick"),
             R("Barracks", 0, 5, 4, 7),
-            R("EastPassage", 5, 5, 6, 6, 0f, Storey, "Floor_Brick"),
+            R("EastPassage", 5, 5, 6, 6, 0f, RoomCeiling, "Floor_Brick"),
             R("Scriptorium", 7, 4, 9, 7),
-            R("SouthPassage", 8, 2, 9, 3, 0f, Storey, "Floor_Brick"),
+            R("SouthPassage", 8, 2, 9, 3, 0f, RoomCeiling, "Floor_Brick"),
             R("Sanctum", 6, -4, 11, 1, 0f, Storey * 2f, "Floor_Brick"),
             R("Ossuary", 12, -2, 13, -1),
         };
@@ -233,6 +267,9 @@ namespace MultiplayerARPG.Demo.EditorTools
             BuildAmbience(scene);
 
             DemoSceneBuilder.MarkStatic(dungeon);
+            // After MarkStatic, which would freeze a chest's lid: the crypt's chest props
+            // become loot chests here, before the bake sees their colliders.
+            DemoTreasureBuilder.ConvertScene(scene);
             BakeNavMesh(scene);
 
             BuildMapInfo();
@@ -278,7 +315,7 @@ namespace MultiplayerARPG.Demo.EditorTools
                 source.playOnAwake = true;
                 source.spatialBlend = 0f;
                 source.volume = 0.6f;
-                var loop = go.AddComponent<MultiplayerARPG.Demo.DemoAmbientLoop>();
+                var loop = go.AddComponent<MultiplayerARPG.AmbientSoundLoop>();
                 loop.baseVolume = 0.6f;
                 loop.fadeWithHeight = false;
             }
@@ -298,7 +335,7 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// greet a character who has just logged in, while the stair down is an event you
         /// are already walking down, and a silent stair is a worse entrance than a scored
         /// one. Zero is measured from when there is
-        /// a listener to hear it - see <see cref="MultiplayerARPG.Demo.DemoMusicPlayer"/> -
+        /// a listener to hear it - see <see cref="MultiplayerARPG.MusicPlayer"/> -
         /// and in a map scene the listener arrives with the player, so zero means "as the
         /// character walks in" rather than "as the scene loads".
         ///
@@ -315,9 +352,9 @@ namespace MultiplayerARPG.Demo.EditorTools
             source.playOnAwake = false;
             source.spatialBlend = 0f;
             source.volume = 0f;
-            var music = go.AddComponent<MultiplayerARPG.Demo.DemoMusicPlayer>();
+            var music = go.AddComponent<MultiplayerARPG.MusicPlayer>();
             music.tracks = tracks;
-            music.mode = MultiplayerARPG.Demo.DemoMusicPlayer.PlayMode.Occasional;
+            music.mode = MultiplayerARPG.MusicPlayer.PlayMode.Occasional;
             music.volume = DemoAudioWiring.DungeonMusicVolume;
             music.firstGapMin = 0f;
             music.firstGapMax = 0f;
@@ -410,9 +447,8 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// meet, a wall goes only across the part of the edge that one has and the other
         /// does not: the riser under a higher floor, or the band above a lower ceiling —
         /// which is how the sanctum keeps its full height over the passages that open
-        /// into it. Ceiling slabs get no collider, because the kit's spawn areas find
-        /// the ground by a ray cast from far above, and a ceiling that stops the ray
-        /// would stand every cultist on the roof.
+        /// into it. Ceiling slabs keep their colliders for the camera's sake, on the
+        /// layer <see cref="CeilingLayer"/> explains.
         /// </summary>
         private static void BuildShell(Transform parent)
         {
@@ -484,7 +520,15 @@ namespace MultiplayerARPG.Demo.EditorTools
             }
         }
 
-        /// <summary>A wall from one height to another, in storeys, with a doorway if asked.</summary>
+        /// <summary>
+        /// A wall from one height to another, in storeys, with a doorway if asked.
+        ///
+        /// A ceiling is not always on a storey line, and the last module is left whole
+        /// rather than scaled down to meet it: the part above the ceiling is behind the
+        /// ceiling slab, where nothing can see it, while a squashed module shows half-
+        /// height bricks round the top of every room. The quoins and the sanctum's piers
+        /// overshoot the same way.
+        /// </summary>
         private static void WallRun(Transform parent, Vector3 edge, float yaw, float from, float to, bool doorway)
         {
             for (float y = from; y < to - 0.01f; y += Storey)
@@ -492,12 +536,7 @@ namespace MultiplayerARPG.Demo.EditorTools
                 bool door = doorway && y < from + 0.01f;
                 GameObject wall = DemoVillageBuilder.Place(door ? "Wall_UnevenBrick_Door_Round" : "Wall_UnevenBrick_Straight",
                     parent, edge + Vector3.up * y, yaw);
-                if (wall == null)
-                    continue;
-                float height = Mathf.Min(Storey, to - y);
-                if (height < Storey - 0.01f)
-                    wall.transform.localScale = new Vector3(1f, height / Storey, 1f);
-                if (door)
+                if (wall != null && door)
                     DemoVillageBuilder.Place("DoorFrame_Round_Brick", parent, edge + Vector3.up * y, yaw);
             }
         }
@@ -505,24 +544,30 @@ namespace MultiplayerARPG.Demo.EditorTools
         // ---- the stair and the gate ---------------------------------------------
 
         /// <summary>
-        /// The stair down from the landing. The pack's long interior stair climbs one
-        /// storey over 5.8m, which from the landing's edge reaches the antechamber's
-        /// door line with its bottom step just inside the stairwell — measured off the
-        /// model: it climbs along its own +Z from an origin 0.36 short of the first step.
-        /// It is 1.76 wide, so one goes in each cell of the well, each stretched the
-        /// last eighth to fill its cell, and the two read as one broad stair.
+        /// The stair down from the landing. Measured off the model, the pack's long
+        /// interior stair is two things along its own +Z: a flight that climbs one storey
+        /// from a first riser 0.36 past the origin to the far edge of its top step at
+        /// 4.35, and behind that, to 5.8, a box with closed sides and no top — the
+        /// "extended" part, made to be buried under the floor the stair arrives at. Set
+        /// with the box in the stairwell it was a 1.3 m hole in front of the top step,
+        /// open on the hollow inside of the stair, so the top step's far edge is put on
+        /// the landing's line and the box lies under the landing's floor. The first riser
+        /// then stands 1.7 m inside the well, which leaves a pace of level floor at the
+        /// foot before the antechamber. It is 1.76 wide, so one goes in each cell of the
+        /// well, each stretched the last eighth to fill its cell, and the two read as one
+        /// broad stair.
         /// </summary>
         private static void BuildStair(Transform parent)
         {
             Room stairwell = RoomNamed("Stairwell");
-            const float bottomOverhang = 0.36f;
+            const float topStepEnd = 4.35f;
             const float stairWidth = 1.76f;
-            // Turned to climb toward -Z, the landing's side, with its foot at the well's
-            // north end, on the antechamber's line.
-            float footZ = stairwell.MaxZ;
+            // Turned to climb toward -Z, the landing's side; at yaw 180 the model's +Z
+            // is the world's -Z, so the origin sits topStepEnd north of the landing's line.
+            float originZ = stairwell.MinZ + topStepEnd;
             for (int x = stairwell.X0; x <= stairwell.X1; ++x)
             {
-                GameObject stair = DemoVillageBuilder.Place("Stair_Interior_SolidExtended", parent, new Vector3(x * Cell, 0f, footZ - bottomOverhang), 180f);
+                GameObject stair = DemoVillageBuilder.Place("Stair_Interior_SolidExtended", parent, new Vector3(x * Cell, 0f, originZ), 180f);
                 if (stair != null)
                     stair.transform.localScale = new Vector3(Cell / stairWidth, 1f, 1f);
             }
@@ -568,8 +613,9 @@ namespace MultiplayerARPG.Demo.EditorTools
         private static void Furnish(Transform parent)
         {
             Room landing = RoomNamed("Landing");
-            Torch(parent, landing, Side.West, -8f);
-            Torch(parent, landing, Side.East, -8f);
+            // One torch a side, on the landing's midline, between the door and the stair.
+            Torch(parent, landing, Side.West, landing.Centre.z);
+            Torch(parent, landing, Side.East, landing.Centre.z);
             // The cultists' colours beside the way out, on the cell the door is not in.
             Against(Prop("Banner_Vertical_1", parent, 0f), landing, Side.South, landing.MaxX - Cell * 0.5f, 0.4f);
 
@@ -682,7 +728,7 @@ namespace MultiplayerARPG.Demo.EditorTools
 
             GameObject firepit = Prop("Firepit", parent, 0f);
             firepit.transform.localPosition = centre;
-            DemoFlameBuilder.Light(DemoFlameBuilder.CampfireFlamePath, firepit.transform, new Vector3(0f, 0.85f, 0f), DemoTorch.Schedule.Always);
+            DemoFlameBuilder.Light(DemoFlameBuilder.CampfireFlamePath, firepit.transform, new Vector3(0f, 0.85f, 0f), TimeOfDayLight.Schedule.Always);
             GameObject runes = Prop("Runes", parent, 0f, false);
             runes.transform.localPosition = centre + new Vector3(0f, 0.015f, 0f);
             runes.transform.localScale = Vector3.one * 2.2f;
@@ -782,7 +828,7 @@ namespace MultiplayerARPG.Demo.EditorTools
             GameObject torch = Prop(TorchModel, parent, FacingYaw(wall), false);
             torch.name = $"Torch_{room.Name}_{wall}";
             Against(torch, room, wall, along, TorchHeight);
-            DemoTorch flame = DemoFlameBuilder.Light(DemoFlameBuilder.TorchFlamePath, torch.transform, TorchFlame, DemoTorch.Schedule.Always);
+            TimeOfDayLight flame = DemoFlameBuilder.Light(DemoFlameBuilder.TorchFlamePath, torch.transform, TorchFlame, TimeOfDayLight.Schedule.Always);
             if (flame == null)
                 return;
             flame.intensity = 2.4f;
@@ -798,6 +844,11 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// this is where a character who has cleared the hills comes next. The sanctum's
         /// guard stands in the hall's north half, so a player coming down the south passage
         /// meets them before the altar and the Hierophant is a second fight, not a pile-on.
+        ///
+        /// The last number is the wait after the 30-second corpse (`DemoEntityBuilder.CorpseLifetime`).
+        /// The cultists' 90 matches the island's two minutes from the kill (2026-10-06; they were
+        /// 40/40/60, which had them back sooner than the island's own monsters once the island went
+        /// to two minutes); the Hierophant keeps two and a half.
         /// </summary>
         private static void BuildSpawners(Scene scene)
         {
@@ -813,9 +864,9 @@ namespace MultiplayerARPG.Demo.EditorTools
             Room barracks = RoomNamed("Barracks");
             Room scriptorium = RoomNamed("Scriptorium");
             Room sanctum = RoomNamed("Sanctum");
-            Spawner(root.transform, "Spawn_Barracks", barracks.Centre + new Vector3(-0.6f, 0f, -1.6f), 1.6f, cultistMale, 7, 8, 2, 40f);
-            Spawner(root.transform, "Spawn_Scriptorium", scriptorium.Centre + new Vector3(-0.5f, 0f, 1.5f), 1.8f, cultistFemale, 8, 9, 2, 40f);
-            Spawner(root.transform, "Spawn_Sanctum", sanctum.Centre + new Vector3(0f, 0f, 3.5f), 3f, cultistMale, 9, 9, 3, 60f);
+            Spawner(root.transform, "Spawn_Barracks", barracks.Centre + new Vector3(-0.6f, 0f, -1.6f), 1.6f, cultistMale, 7, 8, 2, 90f);
+            Spawner(root.transform, "Spawn_Scriptorium", scriptorium.Centre + new Vector3(-0.5f, 0f, 1.5f), 1.8f, cultistFemale, 8, 9, 2, 90f);
+            Spawner(root.transform, "Spawn_Sanctum", sanctum.Centre + new Vector3(0f, 0f, 3.5f), 3f, cultistMale, 9, 9, 3, 90f);
             Spawner(root.transform, "Spawn_Hierophant", sanctum.Centre + new Vector3(0f, 0f, -3.6f), 0.5f, hierophant, 10, 10, 1, 120f);
         }
 
@@ -906,7 +957,7 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// left is the entity and the trigger, and a prefab of its own so it has a
         /// network id of its own.
         ///
-        /// The entity itself is swapped for <see cref="DemoDungeonGate"/>, which sends
+        /// The entity itself is swapped for <see cref="DeferredWarpPortalEntity"/>, which sends
         /// each character through once: a character's capsule and its hit boxes are all
         /// tagged as the player, and every one of them entering the trigger is a
         /// request to warp. Two scene changes started in the same frame hung the editor.
@@ -928,11 +979,11 @@ namespace MultiplayerARPG.Demo.EditorTools
             foreach (GameObject child in doomed)
                 Object.DestroyImmediate(child);
             var portal = gate.GetComponent<WarpPortalEntity>();
-            if (portal != null && !(portal is DemoDungeonGate))
+            if (portal != null && !(portal is DeferredWarpPortalEntity))
                 Object.DestroyImmediate(portal);
-            if (gate.GetComponent<DemoDungeonGate>() == null)
+            if (gate.GetComponent<DeferredWarpPortalEntity>() == null)
             {
-                var demoGate = gate.AddComponent<DemoDungeonGate>();
+                var demoGate = gate.AddComponent<DeferredWarpPortalEntity>();
                 var serialized = new SerializedObject(demoGate);
                 serialized.FindProperty("warpImmediatelyWhenEnter").boolValue = true;
                 serialized.FindProperty("warpSignals").arraySize = 0;

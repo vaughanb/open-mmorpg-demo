@@ -44,6 +44,24 @@ namespace MultiplayerARPG.Demo.EditorTools
         public const string WolfYelp = "WolfYelp";
         public const string DeerHurt = "DeerHurt";
         public const string WeaponHit = "Hit";
+        public const string Freeze = "Freeze";
+        public const string Shatter = "Shatter";
+        public const string BowDraw = "BowDraw";
+        public const string ArrowImpact = "ArrowImpact";
+        public const string VolleyWhistle = "VolleyWhistle";
+        public const string VolleyImpact = "VolleyImpact";
+        public const string DoorOpen = "DoorOpen";
+        public const string DoorClose = "DoorClose";
+        public const string ChestOpen = "ChestOpen";
+        public const string ChestClose = "ChestClose";
+        public const string TreeChop = "TreeChop";
+        public const string RockHit = "RockHit";
+        public const string WeaponSheath = "WeaponSheath";
+        public const string WeaponUnsheath = "WeaponUnsheath";
+
+        private const string HarvestDir = "Assets/OpenMMORPG/Demo/Prefabs/GamePlay/Harvestables";
+        private const string TreasureDir = "Assets/OpenMMORPG/Demo/Prefabs/GamePlay/Treasure";
+        private const string HomesteadDoorPath = "Assets/OpenMMORPG/Demo/Prefabs/GamePlay/Buildings/Homestead/DemoHomesteadDoor.prefab";
 
         /// <summary>
         /// How loud a hurt grunt or a death cry plays, before the player's SFX setting scales it.
@@ -71,6 +89,10 @@ namespace MultiplayerARPG.Demo.EditorTools
         public const string OceanWaves = "OceanWaves";
         public const string CryptAmbience = "CryptAmbience";
         public const string Underwater = "Underwater";
+        /// <summary>The rain loop. The thunder is in the clip, so there is no separate thunder family.</summary>
+        public const string RainAndThunder = "RainAndThunder";
+        /// <summary>A foot going into the sea or stepping through it (FootstepEffects); swimming keeps SwimStroke.</summary>
+        public const string WaterSplash = "WaterSplash";
 
         /// <summary>
         /// The music, named by the pieces themselves rather than by a numbered family.
@@ -84,13 +106,14 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// </summary>
         public const string MenuTheme = "Theme du Chevalier";
         public const string IslandTheme = "Ruined Temple";
+        public const string IslandTheme2 = "The Unresolved Path";
         public const string DungeonTheme = "Cavernous Droning";
 
         /// <summary>Played on a loop under the menu and the character screens.</summary>
         public static readonly string[] MenuMusic = { MenuTheme };
 
         /// <summary>Played now and then out on the island, with long silences between.</summary>
-        public static readonly string[] IslandMusic = { IslandTheme };
+        public static readonly string[] IslandMusic = { IslandTheme, IslandTheme2 };
 
         /// <summary>Played on a loop down in the crypt.</summary>
         public static readonly string[] DungeonMusic = { DungeonTheme };
@@ -134,6 +157,14 @@ namespace MultiplayerARPG.Demo.EditorTools
         private static readonly Hook[] Hooks =
         {
             new Hook { Prefix = Footstep, Purpose = "footsteps for every character, all gaits" },
+            new Hook { Prefix = BowDraw, Purpose = "the string drawn through Aimed Shot's and Volley's casts (silent until provided)" },
+            new Hook { Prefix = "AimedShot", Purpose = "Aimed Shot's loose (falls back to ArrowFire)" },
+            new Hook { Prefix = "Volley", Purpose = "Volley's loose (falls back to ArrowFire)" },
+            new Hook { Prefix = ArrowImpact, Purpose = "a ranger skill's arrow landing in a body (falls back to Hit)" },
+            new Hook { Prefix = "CripplingShot", Purpose = "the roots binding a crippled target (silent until provided)" },
+            new Hook { Prefix = VolleyWhistle, Purpose = "each wave of Volley's arrows coming down (silent until provided)" },
+            new Hook { Prefix = VolleyImpact, Purpose = "Volley's arrows going into the ground, single thunks (falls back to ArrowImpact)" },
+            new Hook { Prefix = "HuntersMark", Purpose = "the Hunter's Mark landing on its quarry (silent until provided)" },
             new Hook { Prefix = HorseStep, Purpose = "the horse's hooves" },
             new Hook { Prefix = DeerStep, Purpose = "the deer's hooves (falls back to a lightened HorseStep)" },
             new Hook { Prefix = DogStep, Purpose = "the collie's paws (falls back to a lightened Footstep)" },
@@ -142,15 +173,26 @@ namespace MultiplayerARPG.Demo.EditorTools
             new Hook { Prefix = WolfYelp, Purpose = "the wolf hurt and dying (silent until provided)" },
             new Hook { Prefix = DeerHurt, Purpose = "the deer hurt and dying (silent until provided)" },
             new Hook { Prefix = SwimStroke, Purpose = "swimming strokes (silent until provided)" },
+            new Hook { Prefix = WaterSplash, Purpose = "a foot going into the sea or wading through it; the dry footstep is silenced while wading (silent until provided)" },
             new Hook { Prefix = SwordSwing, Purpose = "sword and axe swings" },
             new Hook { Prefix = PunchSwing, Purpose = "unarmed swings" },
             new Hook { Prefix = ArrowFire, Purpose = "bow shots, on the loose" },
             new Hook { Prefix = SpellCast, Purpose = "staff casts, on the launch, and the mage's bolt and heal" },
             new Hook { Prefix = ShieldBash, Purpose = "the warrior's Shield Bash (falls back to PunchSwing)" },
-            new Hook { Prefix = SkillImpact, Purpose = "Frost Nova and Meteor landing (falls back to SpellCast)" },
+            new Hook { Prefix = SkillImpact, Purpose = "the novas going off (falls back to SpellCast); Meteor's own clip plays as its rock lands" },
             new Hook { Prefix = WeaponHit, Purpose = "any weapon landing on a target, via the default damage hit effects" },
+            new Hook { Prefix = Freeze, Purpose = "ice forming round anything frozen (silent until provided)" },
+            new Hook { Prefix = Shatter, Purpose = "the ice breaking: a frozen character's as the freeze ends, and Frost Nova's crystals (silent until provided)" },
             new Hook { Prefix = Shout, Purpose = "the warrior's Rallying Cry (silent until provided)" },
             new Hook { Prefix = LevelUp, Purpose = "the level-up chime (silent until provided)" },
+            new Hook { Prefix = DoorOpen, Purpose = "a house door or a built door swinging open (silent until provided)" },
+            new Hook { Prefix = DoorClose, Purpose = "a door coming to rest shut (silent until provided)" },
+            new Hook { Prefix = ChestOpen, Purpose = "a treasure chest's lid going up (silent until provided)" },
+            new Hook { Prefix = ChestClose, Purpose = "a treasure chest's lid coming down (silent until provided)" },
+            new Hook { Prefix = TreeChop, Purpose = "an axe landing on a tree (silent until provided)" },
+            new Hook { Prefix = RockHit, Purpose = "a pickaxe landing on a boulder or an iron vein (silent until provided)" },
+            new Hook { Prefix = WeaponSheath, Purpose = "a weapon going onto the back (silent until provided)" },
+            new Hook { Prefix = WeaponUnsheath, Purpose = "a weapon coming off the back (silent until provided)" },
             new Hook { Prefix = ManHit, Purpose = "hurt grunts, male characters" },
             new Hook { Prefix = WomanHit, Purpose = "hurt grunts, female characters" },
             new Hook { Prefix = ManDeath, Purpose = "death cries, male characters" },
@@ -159,8 +201,10 @@ namespace MultiplayerARPG.Demo.EditorTools
             new Hook { Prefix = OceanWaves, Purpose = "shore loop, fades with distance from the waterline and with height" },
             new Hook { Prefix = CryptAmbience, Purpose = "dungeon ambience loop" },
             new Hook { Prefix = Underwater, Purpose = "loop while the camera is under the sea" },
+            new Hook { Prefix = RainAndThunder, Purpose = "the rain loop, thunder and all, faded in and out with each shower (wired into the island by Build Weather)" },
             new Hook { Prefix = MenuTheme, Purpose = "menu music, on a loop", Single = true },
             new Hook { Prefix = IslandTheme, Purpose = "island music, now and then", Single = true },
+            new Hook { Prefix = IslandTheme2, Purpose = "island music, now and then (alternates with the first)", Single = true },
             new Hook { Prefix = DungeonTheme, Purpose = "crypt music, on a loop", Single = true },
         };
 
@@ -237,16 +281,24 @@ namespace MultiplayerARPG.Demo.EditorTools
 
             bool levelUp = WireLevelUpEffect();
             WireHitEffect();
+            WireIceSounds();
+            WireRangerSounds();
+
+            int doors = WireDoors();
+            int chests = WireChests();
+            int nodes = WireHarvestables();
 
             int streamed = StreamMusic();
+            int compressed = CompressLoops();
             DemoDatabaseWiring.PreloadAudio();
             AssetDatabase.SaveAssets();
             Debug.Log($"[{nameof(DemoAudioWiring)}] Wired audio into {characters} characters, " +
                       $"{(horse ? "the horse, " : "")}{models} models, {weapons} weapons" +
-                      $"{(levelUp ? " and the level-up effect" : "")}. " +
+                      $"{(levelUp ? " and the level-up effect" : "")}, {doors} door(s), {chests} chest prefab(s) and {nodes} harvest node(s). " +
                       "The island's ambience is built with the sea (Rebuild Sea), and its music with it; "
                       + "the menu's music with the menu stage (Build Menu Stage)."
-                      + (streamed > 0 ? $" Set {streamed} music track(s) to stream." : "") + "\n" + Report());
+                      + (streamed > 0 ? $" Set {streamed} music track(s) to stream." : "")
+                      + (compressed > 0 ? $" Set {compressed} ambience loop(s) to compressed-in-memory." : "") + "\n" + Report());
         }
 
         /// <summary>
@@ -315,6 +367,138 @@ namespace MultiplayerARPG.Demo.EditorTools
         }
 
         /// <summary>
+        /// The ice's sounds, onto the crystals that make them (`DemoIceShards`): a frozen character's
+        /// ice forms with the Freeze family and breaks with the Shatter family, and Frost Nova's field
+        /// of crystals breaks with Shatter too. The field has no forming sound of its own - the nova's
+        /// clip, which the caster plays, is that.
+        ///
+        /// Written whether or not the clips exist, like every array here, so a family taken away goes
+        /// silent rather than leaving a dead reference behind. Build Skill Effects runs this too, since
+        /// it rebuilds both prefabs from nothing.
+        /// </summary>
+        internal static bool WireIceSounds()
+        {
+            AudioClip[] freeze = Clips(Freeze);
+            AudioClip[] shatter = Clips(Shatter);
+            bool frozen = WireIce(DemoSkillEffectBuilder.EffectPath(DemoSkillEffectBuilder.FrozenName), freeze, shatter);
+            bool nova = WireIce(DemoSkillEffectBuilder.EffectPath(DemoSkillEffectBuilder.FrostNovaBurstName),
+                                new AudioClip[0], shatter);
+            return frozen || nova;
+        }
+
+        /// <summary>
+        /// The ranger's sounds (2026-09-25), onto the effects that make them: the draw, the loose, the
+        /// arrow landing, the roots, the mark, and Volley's rain. Every one plays through
+        /// <see cref="MultiplayerARPG.GameEffectSounds"/> or the rain itself rather than the
+        /// kit's `randomSoundEffects`, whose one-metre rolloff loses an arrow landing twenty metres
+        /// from the archer who loosed it.
+        ///
+        /// None of it can live on the skill's animation, where every other skill's sound is: the kit
+        /// plays that as the animation starts, and a bow skill's animation starts a whole draw before
+        /// the arrow goes. Build Skill Effects runs this too, since it rebuilds all of these.
+        /// </summary>
+        internal static bool WireRangerSounds()
+        {
+            AudioClip[] impact = Clips(ArrowImpact);
+            if (impact.Length == 0)
+                impact = Clips(WeaponHit);
+            var effects = new (string effect, AudioClip[] clips)[]
+            {
+                ("FX_AimedDraw", Clips(BowDraw)),
+                ("FX_VolleyDraw", Clips(BowDraw)),
+                ("FX_CripplingDraw", Clips(BowDraw)),
+                ("FX_AimedRelease", SkillClips("AimedShot", ArrowFire)),
+                ("FX_VolleyRelease", SkillClips("Volley", ArrowFire)),
+                ("FX_HitAimed", impact),
+                ("FX_HitCrippling", impact),
+                ("FX_HitMark", impact),
+                ("FX_HitArrow", impact),
+                ("FX_Crippled", Clips("CripplingShot")),
+                ("FX_HuntersMark", Clips("HuntersMark")),
+            };
+            bool wrote = false;
+            foreach (var (effect, clips) in effects)
+                wrote |= WireEffectVoice(DemoSkillEffectBuilder.EffectPath(effect), clips);
+
+            string rainPath = DemoSkillEffectBuilder.EffectPath(DemoSkillEffectBuilder.VolleyRainName);
+            if (AssetDatabase.LoadAssetAtPath<GameObject>(rainPath) != null)
+            {
+                GameObject root = PrefabUtility.LoadPrefabContents(rainPath);
+                try
+                {
+                    var rain = root.GetComponent<MultiplayerARPG.Demo.DemoVolleyRain>();
+                    if (rain != null)
+                    {
+                        rain.whistleSounds = Clips(VolleyWhistle);
+                        // Until there are thunks into earth of their own, the arrow-in-a-body ones stand
+                        // in: single impacts either way, and the rain spaces them (2026-09-25).
+                        AudioClip[] ground = Clips(VolleyImpact);
+                        rain.impactSounds = ground.Length > 0 ? ground : impact;
+                        // Borrowed, they play 13% low - duller and heavier, earth rather than a body. Clips
+                        // made for the ground play as recorded.
+                        rain.impactPitch = ground.Length > 0 ? 1f : BorrowedGroundPitch;
+                        PrefabUtility.SaveAsPrefabAsset(root, rainPath);
+                        wrote = true;
+                    }
+                }
+                finally
+                {
+                    PrefabUtility.UnloadPrefabContents(root);
+                }
+            }
+            return wrote;
+        }
+
+        /// <summary>The pitch Volley's rain plays the ArrowImpact thunks at while it has no ground impacts of its own.</summary>
+        private const float BorrowedGroundPitch = 0.87f;
+
+        private static bool WireEffectVoice(string effectPath, AudioClip[] clips)
+        {
+            // Not built yet: Build Skill Effects wires it as it builds it.
+            if (AssetDatabase.LoadAssetAtPath<GameObject>(effectPath) == null)
+                return false;
+            GameObject root = PrefabUtility.LoadPrefabContents(effectPath);
+            try
+            {
+                var voice = root.GetComponent<MultiplayerARPG.GameEffectSounds>();
+                if (voice == null)
+                    return false;
+                voice.clips = clips;
+                PrefabUtility.SaveAsPrefabAsset(root, effectPath);
+                return true;
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(root);
+            }
+        }
+
+        private static bool WireIce(string effectPath, AudioClip[] form, AudioClip[] shatter)
+        {
+            // Not built yet: Build Skill Effects wires it as it builds it.
+            if (AssetDatabase.LoadAssetAtPath<GameObject>(effectPath) == null)
+                return false;
+            GameObject root = PrefabUtility.LoadPrefabContents(effectPath);
+            try
+            {
+                bool wrote = false;
+                foreach (var shards in root.GetComponentsInChildren<MultiplayerARPG.Demo.DemoIceShards>(true))
+                {
+                    shards.formSounds = form;
+                    shards.shatterSounds = shatter;
+                    wrote = true;
+                }
+                if (wrote)
+                    PrefabUtility.SaveAsPrefabAsset(root, effectPath);
+                return wrote;
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(root);
+            }
+        }
+
+        /// <summary>
         /// Writes a clip family onto every <see cref="GameEffect"/> in an effect prefab.
         ///
         /// The array is written **unconditionally**, empty family or not, because that is what
@@ -358,27 +542,224 @@ namespace MultiplayerARPG.Demo.EditorTools
         }
 
         /// <summary>
-        /// Adds the gate that keeps the death cry quiet until the character's health has synced.
+        /// Makes sure the gate that keeps the death cry quiet until the character's health has
+        /// synced is there.
         ///
         /// Paired with every `CharacterDeathSoundComponent` this builder adds, because the fault is
         /// in that component rather than in any one entity: it assumes a character starts alive,
-        /// and a just-spawned one reads as dead until the server's first sync. See
-        /// <see cref="MultiplayerARPG.Demo.DemoDeathSoundGate"/>.
-        ///
-        /// Removed again wherever the death component is removed - the two go together, and a gate
-        /// left behind on an entity with no death sound is a component that does nothing but look
-        /// like it might.
+        /// and a just-spawned one reads as dead until the server's first sync. The gate is part of
+        /// <see cref="MultiplayerARPG.CharacterHurtSoundComponent"/> (it was a component of its
+        /// own), which holds a death component beside it shut until the character is alive - so an
+        /// entity with a death cry and no hurt clips still gets one, with no clips of its own.
+        /// With no death component beside it the gate does nothing.
         /// </summary>
         private static void GateDeathSound(GameObject root)
         {
-            GetOrAdd<MultiplayerARPG.Demo.DemoDeathSoundGate>(root);
+            GetOrAdd<MultiplayerARPG.CharacterHurtSoundComponent>(root);
         }
 
+        /// <summary>Nothing to take away now that the gate lives in the hurt component.</summary>
         private static void UngateDeathSound(GameObject root)
         {
-            var gate = root.GetComponent<MultiplayerARPG.Demo.DemoDeathSoundGate>();
-            if (gate != null)
-                Object.DestroyImmediate(gate);
+        }
+
+        /// <summary>
+        /// The village's doors, which live in the map scene rather than in a prefab - the
+        /// village is a settled area, so a regenerate no longer rebuilds them and the scene
+        /// is where they are - and the homestead door prefab the player builds from.
+        /// Returns how many doors were wired.
+        /// </summary>
+        private static int WireDoors()
+        {
+            int doors = 0;
+            string scenePath = DemoSceneBuilder.ScenePath;
+            UnityEngine.SceneManagement.Scene scene = default;
+            bool wasOpen = false;
+            for (int i = 0; i < UnityEngine.SceneManagement.SceneManager.sceneCount; ++i)
+            {
+                UnityEngine.SceneManagement.Scene loaded = UnityEngine.SceneManagement.SceneManager.GetSceneAt(i);
+                if (loaded.isLoaded && loaded.path == scenePath)
+                {
+                    scene = loaded;
+                    wasOpen = true;
+                }
+            }
+            if (!wasOpen && System.IO.File.Exists(scenePath))
+                scene = UnityEditor.SceneManagement.EditorSceneManager.OpenScene(scenePath, UnityEditor.SceneManagement.OpenSceneMode.Additive);
+            if (scene.IsValid())
+            {
+                foreach (GameObject root in scene.GetRootGameObjects())
+                {
+                    foreach (SceneryDoor door in root.GetComponentsInChildren<SceneryDoor>(true))
+                    {
+                        if (WireDoor(door))
+                            ++doors;
+                    }
+                }
+                UnityEditor.SceneManagement.EditorSceneManager.MarkSceneDirty(scene);
+                UnityEditor.SceneManagement.EditorSceneManager.SaveScene(scene);
+                if (!wasOpen)
+                    UnityEditor.SceneManagement.EditorSceneManager.CloseScene(scene, true);
+            }
+
+            if (AssetDatabase.LoadAssetAtPath<GameObject>(HomesteadDoorPath) != null)
+            {
+                GameObject root = PrefabUtility.LoadPrefabContents(HomesteadDoorPath);
+                try
+                {
+                    var swing = root.GetComponentInChildren<BuildingDoorLeaf>(true);
+                    if (swing != null && WireBuildingDoor(swing))
+                    {
+                        PrefabUtility.SaveAsPrefabAsset(root, HomesteadDoorPath);
+                        ++doors;
+                    }
+                }
+                finally
+                {
+                    PrefabUtility.UnloadPrefabContents(root);
+                }
+            }
+            return doors;
+        }
+
+        /// <summary>The door families onto a village door. Written whether or not the clips exist, so a family taken away goes quiet.</summary>
+        internal static bool WireDoor(SceneryDoor door)
+        {
+            if (door == null)
+                return false;
+            var serialized = new SerializedObject(door);
+            SetClips(serialized.FindProperty("openSounds"), Clips(DoorOpen));
+            SetClips(serialized.FindProperty("closeSounds"), Clips(DoorClose));
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            EditorUtility.SetDirty(door);
+            return true;
+        }
+
+        /// <summary>The same families onto a door the player builds.</summary>
+        internal static bool WireBuildingDoor(BuildingDoorLeaf door)
+        {
+            if (door == null)
+                return false;
+            var serialized = new SerializedObject(door);
+            SetClips(serialized.FindProperty("openSounds"), Clips(DoorOpen));
+            SetClips(serialized.FindProperty("closeSounds"), Clips(DoorClose));
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            EditorUtility.SetDirty(door);
+            return true;
+        }
+
+        /// <summary>The two chest prefabs. The chests in the scenes are instances of them, so they follow.</summary>
+        private static int WireChests()
+        {
+            int chests = 0;
+            foreach (string guid in AssetDatabase.FindAssets("t:Prefab", new[] { TreasureDir }))
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guid);
+                GameObject root = PrefabUtility.LoadPrefabContents(path);
+                try
+                {
+                    var chest = root.GetComponent<TreasureChestEntity>();
+                    if (chest != null && WireChest(chest))
+                    {
+                        PrefabUtility.SaveAsPrefabAsset(root, path);
+                        ++chests;
+                    }
+                }
+                finally
+                {
+                    PrefabUtility.UnloadPrefabContents(root);
+                }
+            }
+            return chests;
+        }
+
+        /// <summary>The chest families onto a chest. DemoTreasureBuilder calls this as it builds the prefab, so a rebuilt chest comes out wired.</summary>
+        internal static bool WireChest(TreasureChestEntity chest)
+        {
+            if (chest == null)
+                return false;
+            var serialized = new SerializedObject(chest);
+            SetClips(serialized.FindProperty("openSounds"), Clips(ChestOpen));
+            SetClips(serialized.FindProperty("closeSounds"), Clips(ChestClose));
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            EditorUtility.SetDirty(chest);
+            return true;
+        }
+
+        /// <summary>
+        /// The tools' impact sounds onto the harvest node prefabs: the chop on trees, the strike on
+        /// boulders and iron veins. A node of any other kind (the mushrooms) is left silent and
+        /// carries no component.
+        /// </summary>
+        private static int WireHarvestables()
+        {
+            int nodes = 0;
+            foreach (string guid in AssetDatabase.FindAssets("t:Prefab", new[] { HarvestDir }))
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guid);
+                GameObject root = PrefabUtility.LoadPrefabContents(path);
+                try
+                {
+                    if (root.GetComponent<HarvestableEntity>() != null)
+                    {
+                        WireHarvestNode(root);
+                        PrefabUtility.SaveAsPrefabAsset(root, path);
+                        ++nodes;
+                    }
+                }
+                finally
+                {
+                    PrefabUtility.UnloadPrefabContents(root);
+                }
+            }
+            return nodes;
+        }
+
+        /// <summary>
+        /// Which family a node makes is read off its name (Harvest_Pine_2, Harvest_IronVein_Rock_Medium_1),
+        /// the way the builder named it. DemoHarvestBuilder calls this as it builds a node, so a rebuilt
+        /// node comes out wired.
+        /// </summary>
+        internal static void WireHarvestNode(GameObject root)
+        {
+            string name = root.name;
+            string family = null;
+            if (name.Contains("Rock") || name.Contains("IronVein"))
+                family = RockHit;
+            else if (name.Contains("Tree") || name.Contains("Pine"))
+                family = TreeChop;
+
+            var sound = root.GetComponent<HarvestImpactEffects>();
+            if (family == null)
+            {
+                // A silent node (the mushrooms). The component stays when it carries particles
+                // (DemoSkillEffectBuilder.WireHarvestEffects), minus any clips it had.
+                if (sound != null)
+                {
+                    var silent = new SerializedObject(sound);
+                    SetClips(silent.FindProperty("clips"), new AudioClip[0]);
+                    silent.ApplyModifiedPropertiesWithoutUndo();
+                    if (silent.FindProperty("hitEffect").objectReferenceValue == null &&
+                        silent.FindProperty("fellEffect").objectReferenceValue == null)
+                        Object.DestroyImmediate(sound, true);
+                    else
+                        EditorUtility.SetDirty(sound);
+                }
+                return;
+            }
+            if (sound == null)
+                sound = root.AddComponent<HarvestImpactEffects>();
+            var serialized = new SerializedObject(sound);
+            SetClips(serialized.FindProperty("clips"), Clips(family));
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            EditorUtility.SetDirty(sound);
+        }
+
+        private static void SetClips(SerializedProperty array, AudioClip[] clips)
+        {
+            array.arraySize = clips.Length;
+            for (int i = 0; i < clips.Length; ++i)
+                array.GetArrayElementAtIndex(i).objectReferenceValue = clips[i];
         }
 
         /// <summary>The clips of one family, in name order. Empty when none are provided.</summary>
@@ -450,6 +831,60 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// the setting.
         /// </summary>
         private const float MusicQuality = 0.5f;
+
+        /// <summary>
+        /// Ambience loops longer than this are kept compressed in memory instead of decoded whole.
+        /// Everything else in the folder is a second or two of a footstep or a sword swing.
+        /// </summary>
+        private const float LoopMinSeconds = 10f;
+
+        /// <summary>
+        /// The Vorbis quality for the ambience loops. The folder's 1.0 is right for a footfall, where
+        /// the file is small whatever is done to it; for a minute of surf it costs about 5 MB of
+        /// decoder input per loop, and a noise-like bed has nothing at 1.0 that it lacks at 0.5.
+        /// </summary>
+        private const float LoopQuality = 0.5f;
+
+        /// <summary>
+        /// Keeps the long ambience beds - the surf, the island bed, the crypt, the sea floor, the rain -
+        /// **compressed in memory** rather than decompressed on load.
+        ///
+        /// Decompressed they are 38 MB of PCM held for the whole session (the surf alone is 14 MB), which
+        /// is a quarter of what every other sound in the demo takes together. Compressed they are about
+        /// 4 MB, decoded as they play, and `Preload Audio Data` still has them resident when the map
+        /// loads, so the first play does not stall.
+        ///
+        /// Not <c>Streaming</c>, which is what the music uses: a streamed clip is opened from disk each
+        /// time it starts, and the rain and the underwater bed start and stop with every shower and
+        /// every dive. <see cref="DemoDatabaseWiring.PreloadAudio"/> leaves the load type alone.
+        /// </summary>
+        private static int CompressLoops()
+        {
+            int changed = 0;
+            foreach (string guid in AssetDatabase.FindAssets("t:AudioClip", new[] { AudioDir }))
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guid);
+                if (IsMusic(System.IO.Path.GetFileNameWithoutExtension(path)))
+                    continue;
+                var clip = AssetDatabase.LoadAssetAtPath<AudioClip>(path);
+                var importer = AssetImporter.GetAtPath(path) as AudioImporter;
+                if (clip == null || importer == null || clip.length < LoopMinSeconds)
+                    continue;
+                AudioImporterSampleSettings settings = importer.defaultSampleSettings;
+                if (settings.loadType == AudioClipLoadType.CompressedInMemory && settings.preloadAudioData &&
+                    settings.compressionFormat == AudioCompressionFormat.Vorbis && Mathf.Approximately(settings.quality, LoopQuality))
+                    continue;
+                settings.loadType = AudioClipLoadType.CompressedInMemory;
+                settings.compressionFormat = AudioCompressionFormat.Vorbis;
+                settings.quality = LoopQuality;
+                settings.preloadAudioData = true;
+                importer.defaultSampleSettings = settings;
+                importer.loadInBackground = true;
+                importer.SaveAndReimport();
+                ++changed;
+            }
+            return changed;
+        }
 
         private static int StreamMusic()
         {
@@ -544,7 +979,7 @@ namespace MultiplayerARPG.Demo.EditorTools
             footstep.swimFootstepSettings = Steps(Clips(SwimStroke), SwimCycle);
             EditorUtility.SetDirty(footstep);
 
-            var hurt = GetOrAdd<MultiplayerARPG.Demo.DemoHurtSoundComponent>(root);
+            var hurt = GetOrAdd<MultiplayerARPG.CharacterHurtSoundComponent>(root);
             hurt.clips = Clips(female ? WomanHit : ManHit);
             hurt.volume = VoiceVolume;
             EditorUtility.SetDirty(hurt);
@@ -585,6 +1020,74 @@ namespace MultiplayerARPG.Demo.EditorTools
                 UngateDeathSound(root);
                 Object.DestroyImmediate(deathComponent);
             }
+
+            WireSheathSounds(root);
+            WireSplashSounds(root);
+        }
+
+        /// <summary>
+        /// The splash family onto a body's <see cref="FootstepEffects"/> - the players', which are the only
+        /// ones that carry it. Anything without the component is left alone. Also what Build Footstep Effects
+        /// calls when it wires a player, so a rebuilt component keeps its clips.
+        /// </summary>
+        internal static void WireSplashSounds(GameObject root)
+        {
+            var effects = root.GetComponent<FootstepEffects>();
+            if (effects == null)
+                return;
+            effects.splashClips = Clips(WaterSplash);
+            EditorUtility.SetDirty(effects);
+        }
+
+        /// <summary>
+        /// The sound of a weapon being drawn and put away, on a **player's** entity: it is the
+        /// one kind that carries weapons on and off a socket, and the sound follows the synced
+        /// sheathed flag that only a character has (see <see cref="WeaponSheathSounds"/>). Anything
+        /// else that arrives here - an NPC, a monster - has the component taken off, as with the
+        /// death cry. A family with no clips is simply an empty array, which plays nothing.
+        /// </summary>
+        internal static void WireSheathSounds(GameObject root)
+        {
+            var existing = root.GetComponent<WeaponSheathSounds>();
+            if (root.GetComponent<BasePlayerCharacterEntity>() == null)
+            {
+                if (existing != null)
+                    Object.DestroyImmediate(existing);
+                return;
+            }
+            var sounds = GetOrAdd<WeaponSheathSounds>(root);
+            sounds.sheathClips = Clips(WeaponSheath);
+            sounds.unsheathClips = Clips(WeaponUnsheath);
+            EditorUtility.SetDirty(sounds);
+        }
+
+        /// <summary>
+        /// <see cref="WireSheathSounds(GameObject)"/> on the player entities already built, and
+        /// nothing else - for `Build Weapon Sheathing`, which puts the rest of sheathing onto a built
+        /// project without a whole `Wire Audio` pass. Returns how many it wired.
+        /// </summary>
+        internal static int WireSheathSoundsOnPlayers()
+        {
+            int wired = 0;
+            foreach (string guid in AssetDatabase.FindAssets("t:Prefab", new[] { EntityDir }))
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guid);
+                var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
+                if (prefab == null || prefab.GetComponent<BasePlayerCharacterEntity>() == null)
+                    continue;
+                GameObject root = PrefabUtility.LoadPrefabContents(path);
+                try
+                {
+                    WireSheathSounds(root);
+                    PrefabUtility.SaveAsPrefabAsset(root, path);
+                    ++wired;
+                }
+                finally
+                {
+                    PrefabUtility.UnloadPrefabContents(root);
+                }
+            }
+            return wired;
         }
 
         /// <summary>
@@ -610,6 +1113,13 @@ namespace MultiplayerARPG.Demo.EditorTools
             /// and dropping a `...Death1.wav` in later wins with no change here.
             /// </summary>
             public string Model, Attack, Hurt, Death;
+
+            /// <summary>
+            /// How high the hurt and death cries play, for a body smaller than the one the clips
+            /// were recorded for - the footsteps' pitch rule applied to the voice. Zero plays them
+            /// as recorded.
+            /// </summary>
+            public float VoicePitch;
         }
 
         private static readonly Animal[] Animals =
@@ -633,6 +1143,14 @@ namespace MultiplayerARPG.Demo.EditorTools
             new Animal { Prefab = "DemoWolf", Family = WolfStep, Fallback = Footstep,
                 WalkClip = 1.067f, GallopClip = 0.567f, Volume = 0.46f, Pitch = 1.12f,
                 Model = "WolfModel", Attack = WolfGrowl, Hurt = WolfYelp },
+            // The wolf pup, the Pup's Collar pet: the wolf at 0.66 on the same rig and gait clips,
+            // so the wolf's cadence, but smaller than the collie - lighter, higher, and yelping
+            // higher too. Its bite is the wolf model's growl, which it shares. Until 2026-09-25 it
+            // had no row here and Wire Audio took it for a person: bootfalls, a man's hurt grunts
+            // and a man's death cry, on the player's own pet.
+            new Animal { Prefab = "DemoWolfPup", Family = WolfStep, Fallback = Footstep,
+                WalkClip = 1.067f, GallopClip = 0.567f, Volume = 0.32f, Pitch = 1.5f,
+                Hurt = WolfYelp, VoicePitch = 1.3f },
         };
 
         /// <summary>
@@ -653,7 +1171,7 @@ namespace MultiplayerARPG.Demo.EditorTools
                     continue;
                 WireAnimal(root, animal.Family, animal.Fallback,
                            animal.WalkClip, animal.GallopClip, animal.Volume, animal.Pitch,
-                           animal.Hurt, animal.Death);
+                           animal.Hurt, animal.Death, animal.VoicePitch);
                 return true;
             }
             return false;
@@ -685,7 +1203,8 @@ namespace MultiplayerARPG.Demo.EditorTools
         internal static void WireAnimal(GameObject root, string family, string fallbackFamily,
                                         float walkClipLength, float gallopClipLength,
                                         float volume, float pitch,
-                                        string hurtFamily = null, string deathFamily = null)
+                                        string hurtFamily = null, string deathFamily = null,
+                                        float voicePitch = 0f)
         {
             AudioClip[] steps = Clips(family);
             bool own = steps.Length > 0;
@@ -716,7 +1235,7 @@ namespace MultiplayerARPG.Demo.EditorTools
             footstep.swimFootstepSettings = Steps(new AudioClip[0], SwimCycle);
             EditorUtility.SetDirty(footstep);
 
-            WireAnimalVoice(root, hurtFamily, deathFamily);
+            WireAnimalVoice(root, hurtFamily, deathFamily, voicePitch);
         }
 
         /// <summary>
@@ -738,7 +1257,7 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// it. A monster **is** a character in the kit's hierarchy, so the wolf passes; the check
         /// costs nothing and stops the next animal from being an NPC.
         /// </summary>
-        private static void WireAnimalVoice(GameObject root, string hurtFamily, string deathFamily)
+        private static void WireAnimalVoice(GameObject root, string hurtFamily, string deathFamily, float voicePitch)
         {
             AudioClip[] hurtClips = string.IsNullOrEmpty(hurtFamily) ? new AudioClip[0] : Clips(hurtFamily);
             AudioClip[] deathClips = string.IsNullOrEmpty(deathFamily) ? new AudioClip[0] : Clips(deathFamily);
@@ -746,13 +1265,17 @@ namespace MultiplayerARPG.Demo.EditorTools
             // bug, and a second bleat is much closer to right than nothing.
             if (deathClips.Length == 0)
                 deathClips = hurtClips;
+            // The hurt component's own +-0.05 spread, centred on the animal's pitch.
+            float pitch = voicePitch > 0f ? voicePitch : 1f;
 
-            var hurt = root.GetComponent<MultiplayerARPG.Demo.DemoHurtSoundComponent>();
+            var hurt = root.GetComponent<MultiplayerARPG.CharacterHurtSoundComponent>();
             if (hurtClips.Length > 0)
             {
-                hurt = GetOrAdd<MultiplayerARPG.Demo.DemoHurtSoundComponent>(root);
+                hurt = GetOrAdd<MultiplayerARPG.CharacterHurtSoundComponent>(root);
                 hurt.clips = hurtClips;
                 hurt.volume = VoiceVolume;
+                hurt.minPitch = pitch - 0.05f;
+                hurt.maxPitch = pitch + 0.05f;
                 EditorUtility.SetDirty(hurt);
             }
             else if (hurt != null)
@@ -766,9 +1289,12 @@ namespace MultiplayerARPG.Demo.EditorTools
             {
                 death = GetOrAdd<CharacterDeathSoundComponent>(root);
                 death.audioSource = Source(root, "_DeathAudioSource");
+                // The kit plays it with PlayOneShot, which the source's pitch carries through.
+                death.audioSource.pitch = pitch;
                 death.settingType = AudioComponentSettingType.Sfx;
                 death.soundData = new CharacterDeathSoundComponent.DeathSoundData { randomAudioClips = deathClips };
                 EditorUtility.SetDirty(death);
+                EditorUtility.SetDirty(death.audioSource);
                 GateDeathSound(root);
             }
             else if (death != null)
@@ -796,8 +1322,9 @@ namespace MultiplayerARPG.Demo.EditorTools
 
         /// <summary>
         /// Swing clips onto the attack animations of a character model: the sword, axe and
-        /// staff sets get the sword swings, the unarmed set the punch swings. Ranged weapons play
-        /// nothing here - their sound is on the item, at the launch.
+        /// staff sets get the sword swings, the unarmed set the punch swings - unless the model
+        /// is an enemy's, whose default set is its weapon's. Ranged weapons play nothing here -
+        /// their sound is on the item, at the launch.
         /// </summary>
         internal static bool WireModel(PlayableCharacterModel model)
         {
@@ -811,14 +1338,21 @@ namespace MultiplayerARPG.Demo.EditorTools
             AudioClip[] bite = AnimalAttackClips(model.name);
             AudioClip[] unarmed = bite.Length > 0 ? bite : punches;
             var serialized = new SerializedObject(model);
-            SetAttackClips(serialized.FindProperty("defaultAnimations.rightHandAttackAnimations"), unarmed);
+            // An enemy's default attack is not a punch but its weapon's swing (see
+            // DemoCharacterBuilder.Wields), so it sounds like one. A bow's is silent here like
+            // any bow's: the loose is heard from the bow, at the launch.
+            // A caster's is a spell, whatever it holds (DemoCharacterBuilder.Casts).
+            string wields = DemoCharacterBuilder.Wields(model.name);
+            AudioClip[] held = DemoCharacterBuilder.Casts(model.name) ? Clips(SpellCast)
+                : wields == null ? unarmed : Swings(wields) ? swings : new AudioClip[0];
+            SetAttackClips(serialized.FindProperty("defaultAnimations.rightHandAttackAnimations"), held);
             SetAttackClips(serialized.FindProperty("defaultAnimations.leftHandAttackAnimations"), unarmed);
             SerializedProperty weapons = serialized.FindProperty("weaponAnimations");
             for (int i = 0; weapons != null && i < weapons.arraySize; i++)
             {
                 SerializedProperty element = weapons.GetArrayElementAtIndex(i);
                 Object type = element.FindPropertyRelative("weaponType").objectReferenceValue;
-                if (type == null || (type.name != "Sword" && type.name != "Axe" && type.name != "Staff"))
+                if (type == null || !Swings(type.name))
                     continue;
                 SetAttackClips(element.FindPropertyRelative("rightHandAttackAnimations"), swings);
                 SetAttackClips(element.FindPropertyRelative("leftHandAttackAnimations"), swings);
@@ -826,6 +1360,12 @@ namespace MultiplayerARPG.Demo.EditorTools
             serialized.ApplyModifiedPropertiesWithoutUndo();
             EditorUtility.SetDirty(model);
             return true;
+        }
+
+        /// <summary>Whether a weapon type's attack is a swing, and so takes the sword swings.</summary>
+        private static bool Swings(string weaponType)
+        {
+            return weaponType == "Sword" || weaponType == "Axe" || weaponType == "Pickaxe" || weaponType == "Staff";
         }
 
         /// <summary>

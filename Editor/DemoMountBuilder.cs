@@ -34,9 +34,9 @@ namespace MultiplayerARPG.Demo.EditorTools
 
         private const string ModelDir = "Assets/OpenMMORPG/Demo/Prefabs/GamePlay/CharacterModels";
         /// <summary>The body the seat is measured against. The two share a skeleton, so one measurement fits both.</summary>
-        private const string RiderModelPath = ModelDir + "/PlayerCharacterModel_Male.prefab";
+        internal const string RiderModelPath = ModelDir + "/PlayerCharacterModel_Male.prefab";
         private const string RiderModelName = "ModelRiding";
-        private const string SitClip = "Sitting_Idle_Loop";
+        internal const string SitClip = "Sitting_Idle_Loop";
 
         /// <summary>
         /// How far out from the hip joint counts as pelvis when looking for where a seated
@@ -47,7 +47,7 @@ namespace MultiplayerARPG.Demo.EditorTools
 
         /// <summary>
         /// How far each thigh is swung out, and dropped, from the chair-sitting pose — the
-        /// figures handed to <see cref="DemoRiderLegs"/>.
+        /// figures handed to <see cref="RiderLegSpread"/>.
         ///
         /// Both are needed. A chair sit holds the thighs **horizontal**, at the height of the
         /// horse's spine, so opening them alone splays them across the top of the barrel
@@ -66,12 +66,12 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// The barrel is 0.33–0.35m in half-width where the rider sits, which is what the
         /// knee has to clear; at 35 degrees it reaches 0.407m. Wider reads as the splits.
         /// </summary>
-        private const float RiderAbductionDegrees = 35f;
+        internal const float RiderAbductionDegrees = 35f;
 
-        private const float RiderDropDegrees = 45f;
+        internal const float RiderDropDegrees = 45f;
 
         private const string ControllerPath = AnimationDir + "/Horse.controller";
-        private const string HorsePrefabPath = VehicleDir + "/DemoHorse.prefab";
+        internal const string HorsePrefabPath = VehicleDir + "/DemoHorse.prefab";
         private const string VehicleTypePath = ResourcesDir + "/VehicleTypes/Horse.asset";
         private const string MountItemPath = ResourcesDir + "/Items/HorseWhistle.asset";
 
@@ -81,6 +81,9 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// about this speed, so the gallop clip does not have to be stretched to cover it.
         /// </summary>
         private const float MountSpeed = 8f;
+
+        /// <summary>How fast the horse backs up, in metres per second: a slow walk.</summary>
+        private const float ReverseSpeed = 1.2f;
 
         /// <summary>
         /// Gait thresholds for the blend tree, in metres per second. Walk is a real horse's
@@ -214,6 +217,14 @@ namespace MultiplayerARPG.Demo.EditorTools
             for (int i = controller.parameters.Length - 1; i >= 0; --i)
                 controller.RemoveParameter(i);
             controller.AddParameter("Speed", AnimatorControllerParameterType.Float);
+            // +1 ahead, -1 backing up: scales the gait state's speed, so the walk runs in
+            // reverse (see MountAnimator). Defaults to forward.
+            controller.AddParameter(new AnimatorControllerParameter
+            {
+                name = "Direction",
+                type = AnimatorControllerParameterType.Float,
+                defaultFloat = 1f,
+            });
 
             AnimatorStateMachine machine = controller.layers[0].stateMachine;
             for (int i = machine.states.Length - 1; i >= 0; --i)
@@ -233,6 +244,8 @@ namespace MultiplayerARPG.Demo.EditorTools
 
             AnimatorState state = machine.AddState("Gait");
             state.motion = tree;
+            state.speedParameterActive = true;
+            state.speedParameter = "Direction";
             machine.defaultState = state;
 
             EditorUtility.SetDirty(controller);
@@ -280,9 +293,13 @@ namespace MultiplayerARPG.Demo.EditorTools
                     animator = modelInstance.AddComponent<Animator>();
                 animator.runtimeAnimatorController = controller;
                 animator.applyRootMotion = false;
-                modelInstance.AddComponent<DemoMountAnimator>();
+                modelInstance.AddComponent<MountAnimator>();
 
-                Vector3 saddle = MeasureSaddle(entity.transform, renderer);
+                // The back, measured; or, once the horse has a saddle, the dish of its seat, which sits
+                // 9.5cm higher and 0.16m further aft (Art/Saddle/Source~/README.md).
+                Vector3 saddle = DemoSaddleBuilder.Available
+                    ? DemoSaddleBuilder.SeatPoint
+                    : MeasureSaddle(entity.transform, renderer);
                 // The kit snaps the rider's *root* to this transform, but what has to meet
                 // the saddle is the rider's seat — and in the sitting pose that is 0.48m up
                 // and a third of a metre forward of the root. Subtracting the measured
@@ -305,7 +322,10 @@ namespace MultiplayerARPG.Demo.EditorTools
                 controllerCollider.height = 1.6f;
                 controllerCollider.radius = 0.5f;
                 controllerCollider.center = new Vector3(0f, 0.9f, 0f);
-                entity.AddComponent<CharacterControllerEntityMovement>();
+                CharacterControllerEntityMovement movement = entity.AddComponent<CharacterControllerEntityMovement>();
+                // The kit backs up at 0.75 of the mount's speed - 6 m/s, a gallop in reverse.
+                // A horse backs out at a slow walk; MountAnimator plays the walk in reverse.
+                movement.standBackwardMoveSpeedRate = ReverseSpeed / MountSpeed;
                 // A horse swims with its legs under and its barrel at the surface.
                 DemoEntityBuilder.SwimOnSurface(entity, 0.9f);
 
@@ -329,7 +349,20 @@ namespace MultiplayerARPG.Demo.EditorTools
                 SetIfPresent(serialized, "miniMapUiTransform", miniMapUi);
                 serialized.ApplyModifiedPropertiesWithoutUndo();
 
+                // Pitches the horse to slopes and plants the hooves. After the saddle is
+                // measured: this samples the idle, and only the first pose sampled in an
+                // editor call reaches the skinning that MeasureSaddle reads.
+                DemoFootIKBuilder.EnsureQuadruped(modelInstance, DemoFootIKBuilder.IdleOf(modelInstance));
+                EnsureRiderSeat(modelInstance);
+                // Last: it skins the saddle to the horse as it stands, and the seat above is already on it.
+                if (DemoSaddleBuilder.Available)
+                {
+                    DemoSaddleBuilder.EnsureMaterial();
+                    DemoSaddleBuilder.EnsureSaddle(modelInstance);
+                }
+
                 DemoAudioWiring.WireHorse(entity);
+                DemoSkillEffectBuilder.WireFootstepEffects(entity);
                 GameObject saved = PrefabUtility.SaveAsPrefabAsset(entity, HorsePrefabPath);
                 // The horse is spawned by asset id when the whistle is used, so the id has to
                 // be on disk, not only in the loaded copy the identity fills in by itself.
@@ -413,7 +446,7 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// there gets the Z offset backwards and seats the rider a third of a metre too far
         /// towards the tail — which is exactly what happened.
         /// </summary>
-        private static Vector3 MeasureRiderContact()
+        internal static Vector3 MeasureRiderContact()
         {
             var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(RiderModelPath);
             AnimationClip sit = DemoAnimationSet.Clip(SitClip);
@@ -437,7 +470,7 @@ namespace MultiplayerARPG.Demo.EditorTools
                     UnityEngine.Animations.AnimationClipPlayable.Create(graph, sit));
                 graph.Evaluate(0.3f);
                 // Posed exactly as the game will pose it, legs included.
-                var legs = animator.gameObject.AddComponent<DemoRiderLegs>();
+                var legs = animator.gameObject.AddComponent<RiderLegSpread>();
                 legs.Configure(RiderAbductionDegrees, RiderDropDegrees);
                 legs.Apply();
 
@@ -480,6 +513,21 @@ namespace MultiplayerARPG.Demo.EditorTools
                     graph.Destroy();
                 Object.DestroyImmediate(inst);
             }
+        }
+
+        /// <summary>
+        /// Puts the seated copy back on each player body without rebuilding the horse.
+        /// Build Character Entities calls this, because it rebuilds the players from the
+        /// kit's template, which has no rider. Before 2026-10-02 that was a separate menu
+        /// step, and a run without it unhorsed both bodies with nothing logged. On a first
+        /// build there is no horse yet, so this does nothing and Build Mounts adds the riders.
+        /// </summary>
+        internal static void RebuildRiders()
+        {
+            if (AssetDatabase.LoadAssetAtPath<VehicleType>(VehicleTypePath) == null)
+                return;
+            foreach (string gender in DemoEntityBuilder.PlayerBodies)
+                BuildRider(DemoEntityBuilder.PlayerEntityPath(gender), $"{ModelDir}/PlayerCharacterModel_{gender}.prefab");
         }
 
         /// <summary>
@@ -533,7 +581,7 @@ namespace MultiplayerARPG.Demo.EditorTools
                 // The rider is a second copy of the body with its own skeleton, and the kit
                 // dresses a seat model through the *main* model's containers - so with the
                 // stock model class the rider sat on the horse in its bare default look while
-                // its gear went onto the hidden body. DemoCharacterModel claims its own
+                // its gear went onto the hidden body. SeatAwarePlayableCharacterModel claims its own
                 // containers when switched to; make sure the body prefab carries it.
                 if (!DemoCharacterBuilder.EnsureDemoCharacterModel(riderModelPath))
                 {
@@ -544,14 +592,14 @@ namespace MultiplayerARPG.Demo.EditorTools
                 var riding = (GameObject)PrefabUtility.InstantiatePrefab(modelPrefab, contents.transform);
                 riding.name = RiderModelName;
                 riding.transform.SetParent(contents.transform, false);
-                var ridingModel = riding.GetComponent<DemoCharacterModel>();
+                var ridingModel = riding.GetComponent<SeatAwarePlayableCharacterModel>();
 
                 ridingModel.defaultAnimations = RidingAnimations();
                 // Opens the legs after the animator has posed them; the clip itself cannot
-                // be re-posed, see DemoRiderLegs.
-                var legs = riding.GetComponent<DemoRiderLegs>();
+                // be re-posed, see RiderLegSpread.
+                var legs = riding.GetComponent<RiderLegSpread>();
                 if (legs == null)
-                    legs = riding.AddComponent<DemoRiderLegs>();
+                    legs = riding.AddComponent<RiderLegSpread>();
                 legs.Configure(RiderAbductionDegrees, RiderDropDegrees);
                 // Deliberately empty. A weapon set would put the character back into its
                 // standing guard the moment a sword was equipped, overriding the seated idle;
@@ -593,7 +641,7 @@ namespace MultiplayerARPG.Demo.EditorTools
         private static DefaultAnimations RidingAnimations()
         {
             // The library's own clip, untouched. Its legs are wrong for a horse, but they
-            // are corrected afterwards by DemoRiderLegs rather than in the clip - the clips
+            // are corrected afterwards by RiderLegSpread rather than in the clip - the clips
             // carry IK goal curves that override any muscle edit.
             AnimState sit = DemoAnimationSet.State(SitClip);
             MoveStates sitMoves = DemoAnimationSet.Moves(SitClip);
@@ -658,6 +706,59 @@ namespace MultiplayerARPG.Demo.EditorTools
                 list.InsertArrayElementAtIndex(i);
                 list.GetArrayElementAtIndex(i).objectReferenceValue = values[i];
             }
+        }
+
+        /// <summary>
+        /// The bone the riders are glued to: a spine bone, not the pelvis-level Body bone the
+        /// foot IK pitches. Measured 2026-10-03 by skinning the horse by hand through Idle, Walk
+        /// and Gallop and comparing the rigid seat point with the top of the posed back under
+        /// it. Glued to Body the rider floated up to 6.9 cm (3 cm on average) over a gallop,
+        /// because the spine flexes and the back under the saddle drops away from Body's frame;
+        /// glued to Torso2 it never floats and sinks at most 1.6 cm, which a seat absorbs.
+        /// Torso2 is still a descendant of Body, so the IK's pitch and drop on a hill reach it.
+        /// </summary>
+        internal const string SeatBoneName = "Torso2";
+
+        /// <summary>
+        /// Glues the riders to a spine bone (the riders half of <see cref="MountAnimator"/>),
+        /// so they rise and fall with the gallop and pitch with the foot IK on a hill instead of
+        /// hanging in the air at the flat-ground seat. Wired explicitly, in the house style, off
+        /// the model's skinned mesh and the bone named by <see cref="SeatBoneName"/> (the
+        /// quadruped IK's body bone if the rig has none). Returns true when the component was
+        /// added or re-pointed.
+        /// </summary>
+        public static bool EnsureRiderSeat(GameObject model)
+        {
+            var ik = model.GetComponent<QuadrupedFootIK>();
+            var skin = model.GetComponentInChildren<SkinnedMeshRenderer>();
+            if (ik == null || ik.body == null || skin == null)
+            {
+                Debug.LogError($"[{nameof(DemoMountBuilder)}] {model.name} has no quadruped foot IK body or skinned mesh to seat a rider on.");
+                return false;
+            }
+            Transform bone = null;
+            foreach (Transform candidate in model.GetComponentsInChildren<Transform>(true))
+            {
+                if (candidate.name == SeatBoneName)
+                {
+                    bone = candidate;
+                    break;
+                }
+            }
+            if (bone == null)
+            {
+                Debug.LogWarning($"[{nameof(DemoMountBuilder)}] {model.name} has no \"{SeatBoneName}\" bone; seating the rider on the IK body instead.");
+                bone = ik.body;
+            }
+            var seat = model.GetComponent<MountAnimator>();
+            bool changed = seat == null;
+            if (seat == null)
+                seat = model.AddComponent<MountAnimator>();
+            if (seat.body != bone || seat.skin != skin)
+                changed = true;
+            seat.body = bone;
+            seat.skin = skin;
+            return changed;
         }
 
         private static Transform Anchor(Transform parent, string name, Vector3 localPosition)

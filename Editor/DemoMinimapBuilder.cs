@@ -258,6 +258,11 @@ namespace MultiplayerARPG.Demo.EditorTools
             {
                 foreach (Camera found in camera.GetComponentsInChildren<Camera>(true))
                     found.targetTexture = target;
+                // The picture is a baked map and a few marker icons in 256 x 256 texels; redrawing it
+                // every frame measured about 1 ms of main-thread time (2026-10-07), twenty times a
+                // second looks the same.
+                if (camera.GetComponent<MinimapCameraThrottle>() == null)
+                    camera.AddComponent<MinimapCameraThrottle>();
                 PrefabUtility.SaveAsPrefabAsset(camera, CameraPath);
             }
             finally

@@ -81,7 +81,7 @@ namespace MultiplayerARPG.Demo.EditorTools
                 CopySerialized(template.GetComponent<PlayerCharacterController>(), controller);
                 var templateIndicator = template.GetComponent<CharacterTargetIndicator>();
                 if (templateIndicator != null)
-                    CopySerialized(templateIndicator, root.AddComponent<CharacterTargetIndicator>());
+                    CopySerialized(templateIndicator, root.AddComponent<MultiplayerARPG.SafeCharacterTargetIndicator>());
 
                 FollowCameraControls gameplayCamera = Camera("GameplayCamera");
                 ConfigureCollision(gameplayCamera);
@@ -99,6 +99,7 @@ namespace MultiplayerARPG.Demo.EditorTools
                 serialized.FindProperty("wasdClearTargetDistance").floatValue = 40f;
                 serialized.FindProperty("targetObjectPrefab").objectReferenceValue =
                     AssetDatabase.LoadAssetAtPath<GameObject>(DemoFeedbackBuilder.MarkerPath);
+                ConfigureBuildPlacement(serialized);
                 serialized.ApplyModifiedPropertiesWithoutUndo();
 
                 GameObject saved = PrefabUtility.SaveAsPrefabAsset(root, PlayerControllerPath);
@@ -113,6 +114,40 @@ namespace MultiplayerARPG.Demo.EditorTools
             {
                 Object.DestroyImmediate(root);
             }
+        }
+
+        /// <summary>
+        /// How a building follows the mouse while it is being placed: freely, turned a
+        /// quarter at a time.
+        ///
+        /// The kit's prefab snaps the aim point to a **4m world grid** and turns in 45 degree
+        /// steps. The grid is what a set of foundations wants - but the homestead's
+        /// foundations line up through their own sockets instead (see DemoHomesteadBuilder),
+        /// and the grid also applies to everything else, so a strongbox or a bench set down
+        /// on a floor could only ever land in the middle of it. And an eighth of a turn
+        /// makes a wall run or a roof ridge diagonal, which none of the pieces are drawn for.
+        /// </summary>
+        internal static void ConfigureBuildPlacement(SerializedObject controller)
+        {
+            controller.FindProperty("buildGridSnap").boolValue = false;
+            controller.FindProperty("buildRotationSnap").boolValue = true;
+            controller.FindProperty("buildRotateAngle").floatValue = 90f;
+        }
+
+        /// <summary>Applies <see cref="ConfigureBuildPlacement"/> to the controller prefab as it stands, without rebuilding it.</summary>
+        internal static void ConfigureBuildPlacementInPlace()
+        {
+            var controller = AssetDatabase.LoadAssetAtPath<MultiplayerARPG.Demo.DemoPlayerController>(PlayerControllerPath);
+            if (controller == null)
+            {
+                Debug.LogWarning($"[{nameof(DemoControllerBuilder)}] No controller at {PlayerControllerPath}; " +
+                                 "run Build Player Controller.");
+                return;
+            }
+            var serialized = new SerializedObject(controller);
+            ConfigureBuildPlacement(serialized);
+            if (serialized.ApplyModifiedPropertiesWithoutUndo())
+                EditorUtility.SetDirty(controller);
         }
 
         /// <summary>Every serialized field of one component onto another that has the same fields, script aside.</summary>
@@ -145,6 +180,11 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// nearer, and the game seemed to have two zoom levels. The near limit is kept
         /// outside the character; the kit never hides the model, so "first person" here is
         /// the inside of its head.
+        ///
+        /// The speed stays positive here, the kit's direction, although that makes the wheel
+        /// zoom out when rolled forward. `DemoPlayerController.OrientWheelZoom` turns it round
+        /// at runtime for the mouse only: the same axis carries the touch-screen pinch, which
+        /// this sign already has the right way round.
         /// </summary>
         private const float ZoomMetresPerNotch = 1f;
 
@@ -316,7 +356,7 @@ namespace MultiplayerARPG.Demo.EditorTools
             "Assets/OpenMMORPG/Demo/Materials/Underwater.mat";
 
         /// <summary>
-        /// Puts <see cref="MultiplayerARPG.Demo.DemoUnderwater"/> on the gameplay camera,
+        /// Puts <see cref="MultiplayerARPG.UnderwaterCameraEffect"/> on the gameplay camera,
         /// with the material it tints the screen through.
         ///
         /// **The material has to exist as an asset.** The component could find the shader
@@ -353,9 +393,9 @@ namespace MultiplayerARPG.Demo.EditorTools
             }
 
             GameObject go = camera.gameObject;
-            var underwater = go.GetComponent<MultiplayerARPG.Demo.DemoUnderwater>();
+            var underwater = go.GetComponent<MultiplayerARPG.UnderwaterCameraEffect>();
             if (underwater == null)
-                underwater = go.AddComponent<MultiplayerARPG.Demo.DemoUnderwater>();
+                underwater = go.AddComponent<MultiplayerARPG.UnderwaterCameraEffect>();
             underwater.overlayMaterial = tint;
             // Whichever clip the Underwater family holds, or none - the fog and the tint
             // work without it, and Wire Audio reports the family as missing.
@@ -388,6 +428,9 @@ namespace MultiplayerARPG.Demo.EditorTools
             property.objectReferenceValue = value;
         }
 
+        /// <summary>The key setting the sheathing toggle reads, by the name the controller asks for.</summary>
+        private const string DemoSheathKey = DemoWeaponSheathing.KeyName;
+
         /// <summary>
         /// The keys under the left hand, the way most MMOs have them: Space jumps and T
         /// attacks the target, or the nearest enemy through the kit's WASD lock; Tab cycles
@@ -400,7 +443,7 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// <c>Demo/InputActions.inputactions</c> is not referenced by anything. The dead
         /// reference is cleared so the inspector stops showing a missing asset.
         /// </summary>
-        private static void ConfigureKeys()
+        internal static void ConfigureKeys()
         {
             GameObject instance = AssetDatabase.LoadAssetAtPath<GameObject>(GameInstancePath);
             InputSettingManager manager = instance == null ? null : instance.GetComponent<InputSettingManager>();
@@ -414,14 +457,36 @@ namespace MultiplayerARPG.Demo.EditorTools
                 { "Attack", KeyCode.T },
                 { "Jump", KeyCode.Space },
                 { "FindEnemy", KeyCode.Tab },
+                // Building placement's turn. The kit had J and K, and J is WoW's guild key,
+                // which DemoWindowKeysBuilder gives the guild window.
+                { "RotateLeft", KeyCode.LeftBracket },
+                { "RotateRight", KeyCode.RightBracket },
+                // Draw or put away the weapons (DemoWeaponSheathing). The kit has no such action,
+                // so unlike the rest this one is added, below, rather than only rebound. Z: free,
+                // under the left hand beside X (crouch), and one a player can find by looking.
+                { DemoSheathKey, KeyCode.Z },
             };
             var serialized = new SerializedObject(manager);
             SerializedProperty settings = serialized.FindProperty("settings");
+            var present = new HashSet<string>();
             for (int i = 0; i < settings.arraySize; i++)
             {
                 SerializedProperty element = settings.GetArrayElementAtIndex(i);
-                if (keys.TryGetValue(element.FindPropertyRelative("keyName").stringValue, out KeyCode key))
+                string name = element.FindPropertyRelative("keyName").stringValue;
+                present.Add(name);
+                if (keys.TryGetValue(name, out KeyCode key))
                     element.FindPropertyRelative("keyCode").intValue = (int)key;
+            }
+            // An action the kit's prefab does not list has to be appended; `InputManager` finds
+            // any name in these settings, so nothing else needs to know about it.
+            foreach (KeyValuePair<string, KeyCode> wanted in keys)
+            {
+                if (present.Contains(wanted.Key))
+                    continue;
+                settings.InsertArrayElementAtIndex(settings.arraySize);
+                SerializedProperty added = settings.GetArrayElementAtIndex(settings.arraySize - 1);
+                added.FindPropertyRelative("keyName").stringValue = wanted.Key;
+                added.FindPropertyRelative("keyCode").intValue = (int)wanted.Value;
             }
             SerializedProperty asset = serialized.FindProperty("inputActionAsset");
             if (asset != null)

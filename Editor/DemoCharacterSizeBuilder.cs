@@ -13,7 +13,7 @@ namespace MultiplayerARPG.Demo.EditorTools
     /// Size is not a body part and could not be done the way hair was. The kit's body-part
     /// system swaps and recolours meshes it instantiates as fake equipment, one at a time;
     /// size is the whole character at once, down to the sword in its hand. See
-    /// <see cref="MultiplayerARPG.Demo.DemoCharacterSize"/>, which is what actually applies
+    /// <see cref="MultiplayerARPG.CharacterSize"/>, which is what actually applies
     /// it - a scale on each model the entity owns.
     ///
     /// What this tool contributes is **the numbers**. The ramp is authored in metres rather
@@ -36,7 +36,7 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// **Where the ends sit is a measured decision, not a taste one.** Everything in the
         /// demo is built around a character 1.8m tall: that is the capsule, the navmesh is
         /// baked for it, and the doorways are cut for it. The capsule does not change with
-        /// the slider (see <see cref="MultiplayerARPG.Demo.DemoCharacterSize"/>), so the only
+        /// the slider (see <see cref="MultiplayerARPG.CharacterSize"/>), so the only
         /// thing the ends have to respect is what the eye can catch - a head through a
         /// lintel, or a body so small it stops reading as the same species.
         ///
@@ -81,6 +81,17 @@ namespace MultiplayerARPG.Demo.EditorTools
                       $"\nMeasured bodies:{report}");
         }
 
+        /// <summary>
+        /// The components only, without the create-screen window. Build Character Entities
+        /// calls this, because it rebuilds the players from the kit's template, which has no
+        /// CharacterSize. Without the component the slider hides its own window, and that
+        /// is how the size choice disappeared on 2026-10-02.
+        /// </summary>
+        internal static int WritePlayerComponents()
+        {
+            return WriteComponents(new System.Text.StringBuilder());
+        }
+
         // ------------------------------------------------------------------
         // The bodies
         // ------------------------------------------------------------------
@@ -106,7 +117,7 @@ namespace MultiplayerARPG.Demo.EditorTools
                     // size, and a component that can never be driven is one that only looks
                     // like it might do something.
                     var player = root.GetComponent<BasePlayerCharacterEntity>();
-                    var existing = root.GetComponent<MultiplayerARPG.Demo.DemoCharacterSize>();
+                    var existing = root.GetComponent<MultiplayerARPG.CharacterSize>();
                     if (player == null)
                     {
                         if (existing == null)
@@ -124,9 +135,9 @@ namespace MultiplayerARPG.Demo.EditorTools
                         continue;
                     }
 
-                    MultiplayerARPG.Demo.DemoCharacterSize size = existing != null
+                    MultiplayerARPG.CharacterSize size = existing != null
                         ? existing
-                        : root.AddComponent<MultiplayerARPG.Demo.DemoCharacterSize>();
+                        : root.AddComponent<MultiplayerARPG.CharacterSize>();
                     size.standingHeight = height;
                     size.scales = ScalesFor(height);
                     size.sizeTitles = titles;
@@ -325,9 +336,9 @@ namespace MultiplayerARPG.Demo.EditorTools
                 Slider slider = DemoCreateColumn.Build(window.transform, "SizeSlider",
                     new Vector2(10f, -78f), new Vector2(-10f, -58f), SliderFill, Heights.Length);
 
-                var driver = create.GetComponent<MultiplayerARPG.Demo.DemoSizeSlider>();
+                var driver = create.GetComponent<MultiplayerARPG.UICharacterSizeSlider>();
                 if (driver == null)
-                    driver = create.gameObject.AddComponent<MultiplayerARPG.Demo.DemoSizeSlider>();
+                    driver = create.gameObject.AddComponent<MultiplayerARPG.UICharacterSizeSlider>();
                 driver.slider = slider;
                 driver.label = label;
 

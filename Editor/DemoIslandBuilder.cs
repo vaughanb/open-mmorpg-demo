@@ -92,6 +92,31 @@ namespace MultiplayerARPG.Demo.EditorTools
         public const float CryptHeight = 16f;
 
         /// <summary>
+        /// The homestead plot: a terrace on the north-east shore where players build (see
+        /// DemoHomesteadBuilder), below the village and above the sand.
+        ///
+        /// It is here because the kit's foundations need level ground and the island has
+        /// almost none. Measured on 2026-09-25, every 16m patch within 70m of the green rises
+        /// 2-16m across it; the kit refuses a building whose footprint cuts into anything
+        /// solid, the terrain included, so on those slopes a foundation shows red wherever
+        /// it is aimed. This shelf is the gentlest ground on the seaward side - flat east to
+        /// west, falling about 3m towards the beach - so the cut is small: under 2m into the
+        /// slope at the back, just over 1m of fill at the front. The route down from the
+        /// village's north edge is an easy walk.
+        ///
+        /// Flat within 55% of the radius, as every pad here is: 6.6m, room for a house of
+        /// two or three foundations and a yard. Outside the village's safe area by a long
+        /// way, which matters because the kit refuses construction in one.
+        /// </summary>
+        public static readonly Vector2 HomesteadCentre = new Vector2(-8f, 76f);
+        public const float HomesteadRadius = 12f;
+        public const float HomesteadHeight = 3.2f;
+        /// <summary>Bare ground in the middle of the plot, where the grass is trodden off.</summary>
+        public const float HomesteadGroundRadius = 7f;
+        /// <summary>Keeps trees and rocks off the plot, so the level part is all buildable.</summary>
+        public const float HomesteadClearance = 9f;
+
+        /// <summary>
         /// How far the bare, trodden ground reaches around each settlement. Ground people
         /// walk over daily is not pasture, so this area is earth rather than grass and
         /// nothing is scattered on it.
@@ -161,6 +186,7 @@ namespace MultiplayerARPG.Demo.EditorTools
             }
             height = Flatten(height, point, CampCentre, CampRadius, CampHeight);
             height = Flatten(height, point, CryptCentre, CryptRadius, CryptHeight);
+            height = Flatten(height, point, HomesteadCentre, HomesteadRadius, HomesteadHeight);
             return height;
         }
 
@@ -239,7 +265,9 @@ namespace MultiplayerARPG.Demo.EditorTools
         public static float SettlementWeight(float x, float z)
         {
             return Mathf.Max(
-                SettlementWeightOne(x, z, VillageCentre, VillageGroundRadius),
+                Mathf.Max(
+                    SettlementWeightOne(x, z, VillageCentre, VillageGroundRadius),
+                    SettlementWeightOne(x, z, HomesteadCentre, HomesteadGroundRadius)),
                 Mathf.Max(
                     SettlementWeightOne(x, z, CampCentre, CampGroundRadius),
                     SettlementWeightOne(x, z, CryptCentre, CryptGroundRadius)));
@@ -288,7 +316,8 @@ namespace MultiplayerARPG.Demo.EditorTools
             var point = new Vector2(x, z);
             return Vector2.Distance(point, VillageCentre) < VillageClearance ||
                    Vector2.Distance(point, CampCentre) < CampClearance ||
-                   Vector2.Distance(point, CryptCentre) < CryptClearance;
+                   Vector2.Distance(point, CryptCentre) < CryptClearance ||
+                   Vector2.Distance(point, HomesteadCentre) < HomesteadClearance;
         }
 
         /// <summary>
@@ -340,6 +369,142 @@ namespace MultiplayerARPG.Demo.EditorTools
             AssetDatabase.SaveAssets();
             Debug.Log($"[{nameof(DemoIslandBuilder)}] Built {TerrainDataPath}: {HeightmapResolution}x{HeightmapResolution} heightmap, " +
                       $"{data.terrainLayers.Length} layers, {data.detailPrototypes.Length} detail types, {data.treeInstanceCount} trees.");
+        }
+
+        /// <summary>
+        /// Rewrites one patch of the island as a full <see cref="Build"/> would now write it,
+        /// and leaves everything else exactly as it is.
+        ///
+        /// For a pad added to <see cref="HeightAt"/> after the island was built. A full
+        /// rebuild would put it in, but also re-roll whatever of the island has drifted from
+        /// the generator since - and the whole undergrowth budget is normalised across the
+        /// map, so one new clearing can thin grass on the far side of it. This touches the
+        /// patch and nothing else:
+        ///
+        /// - **Heights and ground paint** are recomputed from the same functions the full
+        ///   build uses, so inside the patch the two cannot disagree.
+        /// - **Undergrowth** is cleared wherever the ground is now bare enough that the full
+        ///   build would plant nothing (`Coverage`'s cut-off), and otherwise left alone.
+        /// - **Trees** standing on the patch are taken out; none are added.
+        ///
+        /// Scene objects standing in the patch are not this method's business - the ground
+        /// under them has moved, so the caller has to re-seat them.
+        /// </summary>
+        public static void RelevelRegion(Vector2 centre, float radius)
+        {
+            TerrainData data = LoadTerrainData();
+            if (data == null)
+            {
+                Debug.LogError($"[{nameof(DemoIslandBuilder)}] No terrain at {TerrainDataPath}; run Build Island Terrain.");
+                return;
+            }
+
+            // ---- heights
+            int side = data.heightmapResolution;
+            float step = Size / (side - 1);
+            int x0 = Mathf.Clamp(Mathf.FloorToInt((centre.x - radius - TerrainOrigin.x) / step) - 1, 0, side - 1);
+            int z0 = Mathf.Clamp(Mathf.FloorToInt((centre.y - radius - TerrainOrigin.z) / step) - 1, 0, side - 1);
+            int x1 = Mathf.Clamp(Mathf.CeilToInt((centre.x + radius - TerrainOrigin.x) / step) + 1, 0, side - 1);
+            int z1 = Mathf.Clamp(Mathf.CeilToInt((centre.y + radius - TerrainOrigin.z) / step) + 1, 0, side - 1);
+            float[,] heights = data.GetHeights(x0, z0, x1 - x0 + 1, z1 - z0 + 1);
+            for (int z = z0; z <= z1; ++z)
+            {
+                for (int x = x0; x <= x1; ++x)
+                {
+                    float wx = TerrainOrigin.x + x * step;
+                    float wz = TerrainOrigin.z + z * step;
+                    if (Vector2.Distance(new Vector2(wx, wz), centre) > radius + step)
+                        continue;
+                    heights[z - z0, x - x0] = Mathf.Clamp01((HeightAt(wx, wz) - SeabedDepth) / TerrainHeight);
+                }
+            }
+            data.SetHeights(x0, z0, heights);
+
+            // ---- ground paint. The slope is measured 2.5m either side, so the paint
+            // changes a little way beyond the pad's own edge; the margin covers it.
+            float paintRadius = radius + 3f;
+            int alphaSide = data.alphamapResolution;
+            float alphaStep = Size / alphaSide;
+            int ax0 = Mathf.Clamp(Mathf.FloorToInt((centre.x - paintRadius - TerrainOrigin.x) / alphaStep), 0, alphaSide - 1);
+            int az0 = Mathf.Clamp(Mathf.FloorToInt((centre.y - paintRadius - TerrainOrigin.z) / alphaStep), 0, alphaSide - 1);
+            int ax1 = Mathf.Clamp(Mathf.CeilToInt((centre.x + paintRadius - TerrainOrigin.x) / alphaStep), 0, alphaSide - 1);
+            int az1 = Mathf.Clamp(Mathf.CeilToInt((centre.y + paintRadius - TerrainOrigin.z) / alphaStep), 0, alphaSide - 1);
+            float[,,] map = data.GetAlphamaps(ax0, az0, ax1 - ax0 + 1, az1 - az0 + 1);
+            var weights = new float[4];
+            for (int z = az0; z <= az1; ++z)
+            {
+                for (int x = ax0; x <= ax1; ++x)
+                {
+                    float wx = TerrainOrigin.x + (x + 0.5f) * alphaStep;
+                    float wz = TerrainOrigin.z + (z + 0.5f) * alphaStep;
+                    if (Vector2.Distance(new Vector2(wx, wz), centre) > paintRadius)
+                        continue;
+                    GroundWeights(wx, wz, weights);
+                    float total = weights[0] + weights[1] + weights[2] + weights[3];
+                    for (int layer = 0; layer < 4; ++layer)
+                        map[z - az0, x - ax0, layer] = total <= 0.0001f ? (layer == 1 ? 1f : 0f) : weights[layer] / total;
+                }
+            }
+            data.SetAlphamaps(ax0, az0, map);
+
+            // ---- undergrowth
+            int detailSide = data.detailResolution;
+            float detailStep = Size / detailSide;
+            int dx0 = Mathf.Clamp(Mathf.FloorToInt((centre.x - radius - TerrainOrigin.x) / detailStep), 0, detailSide - 1);
+            int dz0 = Mathf.Clamp(Mathf.FloorToInt((centre.y - radius - TerrainOrigin.z) / detailStep), 0, detailSide - 1);
+            int dx1 = Mathf.Clamp(Mathf.CeilToInt((centre.x + radius - TerrainOrigin.x) / detailStep), 0, detailSide - 1);
+            int dz1 = Mathf.Clamp(Mathf.CeilToInt((centre.y + radius - TerrainOrigin.z) / detailStep), 0, detailSide - 1);
+            int cleared = 0;
+            for (int layer = 0; layer < data.detailPrototypes.Length; ++layer)
+            {
+                int[,] density = data.GetDetailLayer(dx0, dz0, dx1 - dx0 + 1, dz1 - dz0 + 1, layer);
+                for (int z = dz0; z <= dz1; ++z)
+                {
+                    for (int x = dx0; x <= dx1; ++x)
+                    {
+                        int before = density[z - dz0, x - dx0];
+                        if (before == 0)
+                            continue;
+                        float wx = TerrainOrigin.x + (x + 0.5f) * detailStep;
+                        float wz = TerrainOrigin.z + (z + 0.5f) * detailStep;
+                        // Cleared where the full build would plant nothing, and otherwise left
+                        // as it is. Scaling the rest by `open` as well, the way `Coverage`
+                        // does, would be closer to a full build the first time and thin the
+                        // grass again on every later run - this has to be safe to repeat.
+                        if (1f - SettlementWeight(wx, wz) < 0.35f)
+                        {
+                            density[z - dz0, x - dx0] = 0;
+                            ++cleared;
+                        }
+                    }
+                }
+                data.SetDetailLayer(dx0, dz0, layer, density);
+            }
+
+            // ---- trees. Everything on the pad goes, not only what now counts as settled:
+            // a tree in the blend ring would be left standing at its old height on ground
+            // that has moved under it, and a full rebuild would not put one there anyway -
+            // the band's slope and spacing rules were rolled against the old ground.
+            var kept = new List<TreeInstance>();
+            int felled = 0;
+            foreach (TreeInstance tree in data.treeInstances)
+            {
+                float wx = TerrainOrigin.x + tree.position.x * Size;
+                float wz = TerrainOrigin.z + tree.position.z * Size;
+                if (Vector2.Distance(new Vector2(wx, wz), centre) <= radius)
+                {
+                    ++felled;
+                    continue;
+                }
+                kept.Add(tree);
+            }
+            if (felled > 0)
+                data.SetTreeInstances(kept.ToArray(), true);
+
+            EditorUtility.SetDirty(data);
+            AssetDatabase.SaveAssets();
+            Debug.Log($"[{nameof(DemoIslandBuilder)}] Relevelled {radius:F0}m round ({centre.x:F0}, {centre.y:F0}): " +
+                      $"heights and paint rewritten, {cleared} undergrowth cell(s) cleared, {felled} tree(s) removed.");
         }
 
         private static TerrainData LoadOrCreate()
@@ -650,9 +815,12 @@ namespace MultiplayerARPG.Demo.EditorTools
                     prototype = prefab,
                     usePrototypeMesh = true,
                     renderMode = DetailRenderMode.VertexLit,
-                    // Not instanced. URP draws nothing at all for instanced mesh details
-                    // here — no error, just bare ground under a full density map. The
-                    // batched path renders them correctly.
+                    // Not instanced. This used to say URP drew nothing for instanced mesh
+                    // details here; with instancing enabled on the materials it does draw them
+                    // (checked 2026-10-03), but far denser and with every blade casting a shadow
+                    // - a different island - so the batched path stays. That path draws details
+                    // with URP's own detail shader and never uses the prefab's material; the wind
+                    // reaches them by replacing that shader (DemoWindMaterials.UseWindDetailShader).
                     useInstancing = false,
                     minWidth = small,
                     maxWidth = large,
@@ -867,6 +1035,12 @@ namespace MultiplayerARPG.Demo.EditorTools
             public float Yaw;
             /// <summary>A real tree rather than undergrowth.</summary>
             public bool Canopy;
+            /// <summary>
+            /// How far apart its band keeps its trees; zero for a wood whose trees may touch.
+            /// A tree held apart was placed on purpose, and the scene keeps it over the wood
+            /// around it when the two cannot both stand as nodes.
+            /// </summary>
+            public float Spacing;
         }
 
         /// <summary>
@@ -926,6 +1100,7 @@ namespace MultiplayerARPG.Demo.EditorTools
                         Scale = Random.Range(spec.MinScale, spec.MaxScale),
                         Yaw = Random.Range(0f, 360f),
                         Canopy = spec.Canopy,
+                        Spacing = spec.Spacing,
                     });
                     if (spec.Spacing > 0f)
                         standing.Add(new Vector2(x, z));

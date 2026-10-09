@@ -21,7 +21,7 @@ namespace MultiplayerARPG.Demo.EditorTools
     ///   "LEVEL UP!" at chest height for two seconds.
     /// - **The destination marker was a legacy `Projector`** with a missing material, and URP
     ///   does not draw Projectors at all. The demo's controller had been left without one.
-    /// - **The safe-area sign lay at the character's feet** (see <see cref="DemoNameplateSign"/>).
+    /// - **The safe-area sign lay at the character's feet** (see <see cref="NameplateSign"/>).
     ///
     /// Everything here writes into existing prefabs in place, so GUIDs and every reference to
     /// them survive, and draws its one texture only into a gap.
@@ -144,7 +144,7 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// The kit's marker was a legacy `Projector` - which URP never draws - with a missing
         /// material, over a green navigation arrow lying flat. It is now a flat sprite ring
         /// with no collider, so it cannot catch the next click, tilted to the slope under it
-        /// by <see cref="DemoGroundMarker"/> - level, it sank half into any hillside. It is only ever seen with
+        /// by <see cref="GroundAlignedMarker"/> - level, it sank half into any hillside. It is only ever seen with
         /// the click-to-move setting on: with it off, the demo's controller cancels ground
         /// clicks and the kit hides the marker while there is no destination.
         /// </summary>
@@ -156,8 +156,8 @@ namespace MultiplayerARPG.Demo.EditorTools
             {
                 for (int i = root.transform.childCount - 1; i >= 0; --i)
                     Object.DestroyImmediate(root.transform.GetChild(i).gameObject);
-                if (root.GetComponent<DemoGroundMarker>() == null)
-                    root.AddComponent<DemoGroundMarker>();
+                if (root.GetComponent<GroundAlignedMarker>() == null)
+                    root.AddComponent<GroundAlignedMarker>();
                 var ringObject = new GameObject("Ring");
                 ringObject.transform.SetParent(root.transform, false);
                 // Lifted a little so it sits on the ground rather than in it.
@@ -250,7 +250,7 @@ namespace MultiplayerARPG.Demo.EditorTools
         private static readonly Vector3 VendingSignOffset = new Vector3(0f, 0.8f, 0f);
 
         /// <summary>
-        /// Puts a <see cref="DemoNameplateSign"/> on the sign's root and takes away any
+        /// Puts a <see cref="NameplateSign"/> on the sign's root and takes away any
         /// `FollowBone`, which cannot find the model's Animator from where the kit spawns the
         /// sign and only leaves it on the ground. With a size, the sign's `Sign` child is
         /// scaled to that width.
@@ -274,9 +274,9 @@ namespace MultiplayerARPG.Demo.EditorTools
                     if (child is RectTransform content)
                         content.anchoredPosition = Vector2.zero;
                 }
-                var sign = root.GetComponent<DemoNameplateSign>();
+                var sign = root.GetComponent<NameplateSign>();
                 if (sign == null)
-                    sign = root.AddComponent<DemoNameplateSign>();
+                    sign = root.AddComponent<NameplateSign>();
                 sign.offset = offset;
                 var image = root.transform.Find("Sign") as RectTransform;
                 if (size > 0f && image != null && image.rect.width > 0f)

@@ -25,7 +25,7 @@ namespace MultiplayerARPG.Demo.EditorTools
     ///   damage handling for free. What makes it game rather than an enemy is its
     ///   <see cref="MonsterCharacteristic.NoHarm"/> characteristic: it wanders, it can be
     ///   shot and killed for its meat and hide, and it never fights back.
-    /// * The collie is an <see cref="NpcEntity"/> carrying <see cref="DemoPatrol"/>, the
+    /// * The collie is an <see cref="NpcEntity"/> carrying <see cref="NpcPatrol"/>, the
     ///   same pairing as the village's walking guard. It is not attackable and has no
     ///   dialog — a dog has nothing to say — so nothing prompts the player to talk to it.
     ///
@@ -48,7 +48,7 @@ namespace MultiplayerARPG.Demo.EditorTools
         private const string MaterialDir = "Assets/OpenMMORPG/Demo/Materials";
         private const string MeshDir = "Assets/OpenMMORPG/Demo/Meshes";
         private const string TextureDir = "Assets/OpenMMORPG/Demo/Textures";
-        private const string EnemyTemplate = EntityDir + "/BaseEnemy.prefab";
+        private const string EnemyTemplate = DemoEntityBuilder.EnemyTemplate;
 
         private const string DeerFbx = MeshDir + "/Deer.fbx";
         private const string CollieFbx = MeshDir + "/Collie.fbx";
@@ -280,6 +280,9 @@ namespace MultiplayerARPG.Demo.EditorTools
             // a flash on a struck animal does not need to follow a lean.
             model.EffectContainers = AnimalEffectContainers(root, bodyHeight);
 
+            // Pitches the body to slopes and plants the paws; measured off the idle above.
+            DemoFootIKBuilder.EnsureQuadruped(root, model.defaultAnimations.idleState.clip);
+
             PrefabUtility.SaveAsPrefabAsset(root, outputPath);
             AssetDatabase.ImportAsset(outputPath, ImportAssetOptions.ForceUpdate);
             Object.DestroyImmediate(root);
@@ -420,8 +423,8 @@ namespace MultiplayerARPG.Demo.EditorTools
 
             // Bolts when shot. The kit has no flee behaviour of any kind — a monster either
             // fights or ignores you — so without this a hunted deer stands and takes it.
-            if (entity.GetComponent<DemoFlee>() == null)
-                entity.AddComponent<DemoFlee>();
+            if (entity.GetComponent<FleeWhenHurt>() == null)
+                entity.AddComponent<FleeWhenHurt>();
 
             Save(entity, $"{EntityDir}/DemoDeer.prefab");
         }
@@ -433,7 +436,7 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// Built the deer's way - the tuned enemy template on an animal model - but with
         /// the two things that make the deer game taken off it. No
         /// <see cref="MonsterCharacteristic.NoHarm"/>, so it fights, and no
-        /// <see cref="DemoFlee"/>, so it does not break off once it is hurt. What it is
+        /// <see cref="FleeWhenHurt"/>, so it does not break off once it is hurt. What it is
         /// worth, what it drops and how hard it hits are in the Wolf spec in
         /// DemoDatabaseWiring, with the reasoning for pitching it under a bandit.
         /// </summary>
@@ -515,12 +518,26 @@ namespace MultiplayerARPG.Demo.EditorTools
                 serialized.ApplyModifiedPropertiesWithoutUndo();
             }
 
+            // The enemy template turns this on, and with it a summon hunts everything
+            // around its owner whatever its characteristic says (see the WolfPup spec in
+            // DemoDatabaseWiring). A pet should wait to be told.
+            var activity = entity.GetComponent<MonsterActivityComponent>();
+            if (activity != null)
+                activity.aggressiveWhileSummoned = false;
+            else
+                Debug.LogError($"[{nameof(DemoWildlifeBuilder)}] No MonsterActivityComponent on the pup — it would keep hunting on its own.");
+
+            // A summon never gives up a chase on its own; this calls it off one the owner
+            // has walked away from.
+            if (entity.GetComponent<PetLeash>() == null)
+                entity.AddComponent<PetLeash>();
+
             Save(entity, $"{EntityDir}/DemoWolfPup.prefab");
         }
 
         /// <summary>
         /// The village dog: the guard's pairing of <see cref="NpcEntity"/> and
-        /// <see cref="DemoPatrol"/>, on four legs. No dialog and no quest marker, so the
+        /// <see cref="NpcPatrol"/>, on four legs. No dialog and no quest marker, so the
         /// player is never prompted to talk to it.
         /// </summary>
         private static void BuildDog()
@@ -567,12 +584,12 @@ namespace MultiplayerARPG.Demo.EditorTools
             agent.radius = CollieRadius;
             agent.stoppingDistance = 0.3f;
 
-            DemoPatrol patrol = entity.AddComponent<DemoPatrol>();
+            NpcPatrol patrol = entity.AddComponent<NpcPatrol>();
             // Measured off the collie's own `Walk` clip, not chosen: 0.28 m/s, rounded.
             // It reads as slow for a dog because the clip is slow - the library drew a
             // dawdle, and any faster is the animal skating. It was 1.6 until 2026-09-22,
             // which is five times the clip's pace, and before that it was not walking at
-            // all: its `moveStates` clip is literally `Gallop`. See DemoPatrol.
+            // all: its `moveStates` clip is literally `Gallop`. See NpcPatrol.
             patrol.walkSpeed = 0.3f;
             patrol.pause = 4f;
             patrol.holdForPlayersWithin = 0f;   // it has nothing to say, so it never stops to talk
@@ -643,6 +660,21 @@ namespace MultiplayerARPG.Demo.EditorTools
                 Place(transforms, "ChatBubbleTransform", height + 0.35f);
                 Place(transforms, "MiniMapContainer", 0f);
             }
+
+            // The body, its loot and the respawn, as DemoEntityBuilder sets them for every
+            // other monster. The template still carries the kit's 2 and 5, so without this a
+            // rebuilt wolf would blink out two seconds after the kill and be back in seven.
+            var monster = entity.GetComponent<BaseMonsterCharacterEntity>();
+            if (monster != null)
+            {
+                var serialized = new SerializedObject(monster);
+                serialized.FindProperty("destroyDelay").floatValue = DemoEntityBuilder.CorpseLifetime;
+                serialized.FindProperty("destroyRespawnDelay").floatValue = DemoEntityBuilder.RespawnAfterBody;
+                serialized.ApplyModifiedPropertiesWithoutUndo();
+            }
+            // The demo's brain, which has to see a target before it notices it - the same
+            // rule as every person on the island, see DemoEntityBuilder.GiveSight.
+            DemoEntityBuilder.GiveSight(entity);
             return entity;
         }
 
@@ -739,6 +771,9 @@ namespace MultiplayerARPG.Demo.EditorTools
 
             PlaceDog(root.transform);
             PlaceDeer(root.transform);
+            // A deer ground is a monster spawn area like the bandits', and without baked spots
+            // it misses everything downhill of its centre - see DemoSpawnSpotBaker.
+            DemoSpawnSpotBaker.Bake(scene);
 
             EditorSceneManager.MarkSceneDirty(scene);
             EditorSceneManager.SaveScene(scene);
@@ -760,7 +795,7 @@ namespace MultiplayerARPG.Demo.EditorTools
             dog.transform.SetParent(root, false);
             dog.transform.position = Ground(origin + DogRoute[0]);
 
-            var patrol = dog.GetComponent<DemoPatrol>();
+            var patrol = dog.GetComponent<NpcPatrol>();
             var route = new Vector3[DogRoute.Length];
             for (int i = 0; i < DogRoute.Length; ++i)
                 route[i] = Ground(origin + DogRoute[i]);

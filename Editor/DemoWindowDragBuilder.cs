@@ -5,7 +5,7 @@ using UnityEngine;
 namespace MultiplayerARPG.Demo.EditorTools
 {
     /// <summary>
-    /// Makes every in-game window movable by its title bar (<see cref="DemoWindowDrag"/>).
+    /// Makes every in-game window movable by its title bar (<see cref="UIWindowDrag"/>).
     ///
     /// Every dialog the demo's UI inherited from the kit's template has the same bones - a
     /// `Window` panel with a `Title` bar anchored across its top - so the title is found by that
@@ -55,11 +55,11 @@ namespace MultiplayerARPG.Demo.EditorTools
             {
                 foreach (Transform title in Titles(root.transform))
                 {
-                    if (title.GetComponent<DemoWindowDrag>() != null)
+                    if (title.GetComponent<UIWindowDrag>() != null)
                         continue;
                     if (OwnedElsewhere(title.gameObject, path))
                         continue;
-                    var drag = title.gameObject.AddComponent<DemoWindowDrag>();
+                    var drag = title.gameObject.AddComponent<UIWindowDrag>();
                     drag.window = (RectTransform)title.parent;
                     ++added;
                 }

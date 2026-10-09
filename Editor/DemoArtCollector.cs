@@ -74,6 +74,27 @@ namespace MultiplayerARPG.Demo.EditorTools
 
         private static readonly string[] SharedSheetMarkers = { "T_Trim_", "T_Brick", "T_Plaster", "T_Wood", "T_Roof" };
 
+        /// <summary>
+        /// The shared sheets' **normal and mask maps** are held at half the size of their colour maps.
+        /// Detail in a normal map and in a metallic/occlusion/smoothness mask is lower-frequency than
+        /// the colour it sits under, so a 2048 pair is mostly spent bytes; at 1024 the fifteen of them
+        /// take 20 MB of video memory instead of 80, and 15 MB of files instead of 52. The colour maps
+        /// keep 2048, which is the resolution a viewer's eye actually reads on a wall.
+        /// </summary>
+        private const int DataSheetSize = 1024;
+
+        private static bool IsDataSheet(string path)
+        {
+            if (!(path.EndsWith("_Normal.png") || path.EndsWith("_Mask.png")))
+                return false;
+            foreach (string marker in SharedSheetMarkers)
+            {
+                if (path.Contains(marker))
+                    return true;
+            }
+            return false;
+        }
+
         /// <summary>Where each source library lands under Demo/Art.</summary>
         private static readonly Dictionary<string, string> PackFolders = new Dictionary<string, string>
         {
@@ -176,6 +197,9 @@ namespace MultiplayerARPG.Demo.EditorTools
                     EditorSceneManager.OpenScene(previousScene, OpenSceneMode.Single);
             }
 
+            // The nature materials arrive from the library on plain Lit; this puts the trees back on
+            // the wind shader. Copies that were already collected are only re-pointed at the shader.
+            DemoWindMaterials.Apply();
             Verify();
         }
 
@@ -339,6 +363,9 @@ namespace MultiplayerARPG.Demo.EditorTools
                         if (path.Contains(marker))
                             target = SharedSheetSize;
                     }
+                    bool dataSheet = IsDataSheet(path);
+                    if (dataSheet)
+                        target = DataSheetSize;
 
                     var existing = AssetDatabase.LoadAssetAtPath<Texture2D>(path);
                     if (existing != null && existing.width <= target && existing.height <= target)
@@ -348,11 +375,16 @@ namespace MultiplayerARPG.Demo.EditorTools
                     TextureImporterCompression wasCompression = importer.textureCompression;
                     TextureImporterType wasType = importer.textureType;
                     int wasMax = importer.maxTextureSize;
+                    bool wasSrgb = importer.sRGBTexture;
 
                     // Read it back as plain colour data: a normal map read through its
                     // own importer comes back swizzled, and a compressed one cannot be
                     // read at all.
                     importer.textureType = TextureImporterType.Default;
+                    // A normal or mask map is numbers, not colour: resampled as sRGB it would be
+                    // filtered in the wrong space and come back a little off.
+                    if (dataSheet)
+                        importer.sRGBTexture = false;
                     importer.isReadable = true;
                     importer.textureCompression = TextureImporterCompression.Uncompressed;
                     importer.maxTextureSize = target;
@@ -365,6 +397,7 @@ namespace MultiplayerARPG.Demo.EditorTools
                     importer.isReadable = wasReadable;
                     importer.textureCompression = wasCompression;
                     importer.maxTextureSize = wasMax;
+                    importer.sRGBTexture = wasSrgb;
 
                     if (encoded == null)
                     {

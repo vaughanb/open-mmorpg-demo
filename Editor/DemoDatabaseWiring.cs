@@ -16,6 +16,7 @@ namespace MultiplayerARPG.Demo.EditorTools
     {
         private const string GameDataDir = "Assets/OpenMMORPG/Demo/GameData";
         private const string EntityDir = "Assets/OpenMMORPG/Demo/Prefabs/GamePlay/CharacterEntities";
+        private const string MissileDir = "Assets/OpenMMORPG/Demo/Prefabs/GamePlay/Missiles";
 
         [MenuItem("Open MMORPG/Demo/Wire Game Database")]
         public static void Wire()
@@ -31,7 +32,11 @@ namespace MultiplayerARPG.Demo.EditorTools
             WriteMap(map);
             WriteClasses(map);
             WriteMonsters();
+            WriteGameplayRule();
+            WriteClassPowers();
+            WriteClassItems();
             WriteSwimSpeed();
+            WriteCrouchSpeed();
             WriteDatabase(database);
             WireDungeon(map);
             PreloadAudio();
@@ -69,6 +74,20 @@ namespace MultiplayerARPG.Demo.EditorTools
             serialized.FindProperty("startPosition").vector3Value =
                 new Vector3(arrival.x, DemoIslandBuilder.HeightAt(arrival.x, arrival.y) + 0.5f, arrival.y);
             serialized.FindProperty("startRotation").vector3Value = new Vector3(0f, ArrivalYaw, 0f);
+
+            // Open PvP on the island (2026-09-29): any player outside your party is fair game -
+            // except inside the village. The village is a safe area (DemoSundriesBuilder), and the
+            // kit makes anyone standing in one invincible and refuses damage from anyone standing
+            // in one (`DamageableEntity.IsInvincible`, `DamageableEntity.CanReceiveDamageFrom`), so
+            // the green, the inn and the shops stay peaceful with no rule of the demo's own. The
+            // crypt keeps the kit's default (no PvP): it is the one place a party goes to fight
+            // monsters together, and its own map info is written by DemoDungeonBuilder.
+            //
+            // One consequence worth knowing: the kit's "nearest enemy" picks - the attack key or
+            // an attacking skill with nothing selected, and the demo's Attack button - include
+            // players on a PvP map, so outside the village they can start a fight with whoever is
+            // closest. That is the kit's behaviour for PvP, left as it is.
+            serialized.FindProperty("pvpMode").intValue = (int)PvpMode.Pvp;
             serialized.ApplyModifiedPropertiesWithoutUndo();
             EditorUtility.SetDirty(map);
         }
@@ -99,22 +118,42 @@ namespace MultiplayerARPG.Demo.EditorTools
         ///
         /// All three start in the same peasant clothes. The starting kit is deliberately
         /// poor so that the armour taken off an enemy is worth putting on.
+        ///
+        /// **The warrior's and ranger's MP is rage and focus** (2026-10-06, see
+        /// <see cref="WriteClassPowers"/>), so both are a flat 100 that does not grow: a rage or focus
+        /// bar is the same size at every level, and the costs in `DemoSkillBuilder` are written
+        /// against it. Only the mage's grows. (They were 30 +5 and 55 +9 a level of mana.)
         /// </summary>
         private static readonly ClassSpec[] Classes =
         {
             new ClassSpec { Name = "Warrior", Title = "Warrior",
                 Description = "Fights up close and can afford to be hit while doing it.",
                 Weapon = "IronShortsword",
-                Hp = 150f, HpPerLevel = 30f, Mp = 30f, MpPerLevel = 5f, MoveSpeed = 4.0f, AtkSpeed = 1f },
+                Hp = 150f, HpPerLevel = 30f, Mp = 100f, MpPerLevel = 0f, MoveSpeed = 4.0f, AtkSpeed = 1f },
             new ClassSpec { Name = "Ranger", Title = "Ranger",
                 Description = "Keeps her distance and makes the ground between you count.",
                 Weapon = "HuntingBow",
-                Hp = 115f, HpPerLevel = 22f, Mp = 55f, MpPerLevel = 9f, MoveSpeed = 4.5f, AtkSpeed = 1.15f },
+                Hp = 115f, HpPerLevel = 22f, Mp = 100f, MpPerLevel = 0f, MoveSpeed = 4.5f, AtkSpeed = 1.15f },
             new ClassSpec { Name = "Mage", Title = "Mage",
                 Description = "Hits hardest at range and worst of the three in reach of a blade.",
                 Weapon = "ApprenticeStaff",
                 Hp = 95f, HpPerLevel = 18f, Mp = 120f, MpPerLevel = 24f, MoveSpeed = 4.0f, AtkSpeed = 0.9f },
         };
+
+        /// <summary>
+        /// What a merchant pays for something, as a share of what it costs in a shop: a
+        /// quarter, as in the games the demo takes its feel from (user, 2026-09-25).
+        ///
+        /// An item has one price, its `sellPrice`, and the shops charge exactly that
+        /// (DemoNpcBuilder.SetSellItems). Left alone, a merchant would buy it back for the same
+        /// money, and buying and reselling would cost nothing. The kit's lever for the gap is a
+        /// **character stat**, `sellItemPriceRate`: the server pays `price * (1 + rate)`
+        /// (`BaseGameplayRule.IncreaseCurrenciesWhenSellItem`) and the item tooltip shows the
+        /// same sum, so a base rate on every class moves both at once and they cannot disagree.
+        /// It is also where a haggling buff or a merchant's ring would add to it, which is what
+        /// the stat is for. No character panel in the demo lists it.
+        /// </summary>
+        private const float SellBackShare = 0.25f;
 
         /// <summary>Peasant clothes, worn by every class at level one.</summary>
         private static readonly string[] StartingClothes =
@@ -159,6 +198,14 @@ namespace MultiplayerARPG.Demo.EditorTools
                 Stat(serialized, "stats.baseStats.weightLimit", 140f);
                 Stat(serialized, "stats.statsIncreaseEachLevel.weightLimit", 6f);
                 Stat(serialized, "stats.baseStats.criRate", 0.05f);
+                // What a critical hit is multiplied by, and it has to be written with the chance.
+                // The kit's rule is `damage * criDmgRate` (DefaultGameplayRule.GetCriticalDamage)
+                // and the field starts at 0, so until 2026-09-29 every critical a player landed -
+                // one hit in twenty at level one, one in nine for a level-eight ranger - did no damage at
+                // all. Found while testing Keen Eye, whose +0.1 read as "crits do 10%". 1.5 is
+                // what the kit's own template enemy carries.
+                Stat(serialized, "stats.baseStats.criDmgRate", 1.5f);
+                Stat(serialized, "stats.baseStats.sellItemPriceRate", SellBackShare - 1f);
 
                 serialized.FindProperty("startMap").objectReferenceValue = map;
                 serialized.FindProperty("rightHandEquipItem").objectReferenceValue = Item(spec.Weapon);
@@ -177,9 +224,15 @@ namespace MultiplayerARPG.Demo.EditorTools
                 // recipe are the three things between that rule and a class that does not
                 // work. Keyed off the class's own starting weapon rather than its name, so
                 // a second bow class would be armed too.
+                // And the two gathering tools, for everyone (2026-09-25): trees give only to an
+                // axe and rock only to a pick (DemoHarvestBuilder), and every building, arrow and
+                // recipe on the island starts with timber or stone. A ranger or a mage with no
+                // tool of its own would have no way into any of it.
                 var starting = new List<KeyValuePair<string, int>>
                 {
                     new KeyValuePair<string, int>("MinorHealingPotion", 5),
+                    new KeyValuePair<string, int>("WoodcuttersAxe", 1),
+                    new KeyValuePair<string, int>("MinersPick", 1),
                 };
                 if (spec.Weapon == "HuntingBow" || spec.Weapon == "YewLongbow")
                     starting.Add(new KeyValuePair<string, int>(DemoSuppliesBuilder.ArrowItem, 100));
@@ -202,6 +255,14 @@ namespace MultiplayerARPG.Demo.EditorTools
         {
             public string Name;
             public string Title;
+            /// <summary>
+            /// The item in its hand. **Not written to the monster's data**, because there is
+            /// nowhere to write it: the kit's `MonsterCharacter` has no weapon slot - only
+            /// `PlayerCharacter` has `rightHandEquipItem`. `DemoEntityBuilder` puts the item's
+            /// model in the entity's hand instead, and the body's model plays that weapon's
+            /// animations as its own (see `DemoCharacterBuilder.Wields`). What it hits for is
+            /// still the monster's own damage below, not the item's.
+            /// </summary>
             public string Weapon;
             public float Hp;
             public float HpPerLevel;
@@ -211,6 +272,12 @@ namespace MultiplayerARPG.Demo.EditorTools
             public string[] Loot;
             /// <summary>The chance of the first piece of loot; the rest fall away from it. Zero means the usual tenth.</summary>
             public float LootRate;
+            /// <summary>
+            /// An item it always drops, on top of its loot - the archers' arrows. Written as a drop at
+            /// rate 1, which the kit hands out before rolling anything else.
+            /// </summary>
+            public string Spoils;
+            public int SpoilsMin, SpoilsMax;
             /// <summary>Experience for a kill at level one, and how much more each level adds.</summary>
             public float Exp;
             public float ExpPerLevel;
@@ -220,7 +287,16 @@ namespace MultiplayerARPG.Demo.EditorTools
             /// <summary>
             /// How it behaves when it sees a player. Left at the default `Normal` a monster
             /// fights back once struck; `NoHarm` never fights at all, which is what makes
-            /// the deer game rather than an enemy.
+            /// the deer game rather than an enemy; `Aggressive` comes at anything inside its
+            /// `VisualRange`.
+            ///
+            /// **Everything that fights is `Aggressive` since 2026-10-02.** The people were
+            /// `Normal` until then, and the kit's `FindEnemy` returns before looking for
+            /// anything that is not aggressive, so a bandit stood in its field until struck
+            /// and the island read as a shooting gallery. The user's call: an enemy that waits
+            /// to be hit is not an enemy. The village is kept clear by `VillagePeace` in
+            /// `DemoSceneBuilder` (no spawn area within 30m of the green) and the town's safe
+            /// area, so the longest pull - the archer's 16m - starts well outside it.
             /// </summary>
             public MonsterCharacteristic Characteristic;
             /// <summary>
@@ -253,8 +329,24 @@ namespace MultiplayerARPG.Demo.EditorTools
             /// `min(hitDistance, startAttackDistance)` whenever that is above zero. Left alone,
             /// every monster in the demo would only attack from half a metre - closer than two
             /// capsules can stand. It is written as 0.85 of the reach here, as the weapons are.
+            ///
+            /// For a monster that shoots, this is how far the missile flies.
             /// </summary>
             public float HitDistance;
+            /// <summary>
+            /// What it shoots, by the name of a prefab in `Prefabs/GamePlay/Missiles`, for a
+            /// monster that fights at range. Empty fights in reach of its hands.
+            /// </summary>
+            public string Missile;
+            /// <summary>How fast the missile flies, in metres a second. Only read with a <see cref="Missile"/>.</summary>
+            public float MissileSpeed;
+            /// <summary>
+            /// The element its blows deal, by `DemoCombatDataBuilder` name. Empty is the game's default,
+            /// Physical, which armour turns. The cultists' bolts are Fire, the element the Hierophant's
+            /// nova already deals: magic, so plate does not stop it and the wizard's robes they drop do.
+            /// Written every time, so a family that loses its element goes back to Physical.
+            /// </summary>
+            public string Element;
         }
 
         /// <summary>
@@ -276,43 +368,88 @@ namespace MultiplayerARPG.Demo.EditorTools
             new MonsterSpec { Name = "BaseEnemy", Title = "Bandit", Weapon = "BanditAxe",
                 Hp = 55f, HpPerLevel = 18f, MoveSpeed = 3.6f, AtkSpeed = 0.85f, VisualRange = 14f,
                 Exp = 9f, ExpPerLevel = 2.5f, Gold = 3f, GoldPerLevel = 0.8f,
+                Characteristic = MonsterCharacteristic.Aggressive,
                 DamageMin = 4f, DamageMax = 8f, DamagePerLevel = 2f, HitDistance = 1.5f,
-                Loot = new[] { "RangerBoots", "RangerBracers", "RangerPauldron", "RangerHood", "RangerBreeches", "RangerJerkin", "HuntingBow" } },
+                // The black set they wear, not the ranger's green (2026-10-05): the green set is made
+                // by players, and is a little better - see DemoItemBuilder.BanditArmourGrade.
+                Loot = new[] { "BanditBoots", "BanditBracers", "BanditPauldron", "BanditHood", "BanditBreeches", "BanditJerkin", "HuntingBow" } },
+            // The bandits' archers: the one enemy on the island that fights at range. They
+            // keep company with the bandits, and once they have you in sight they do not
+            // come to you: an archer stops about twelve metres off and looses from there, so
+            // the fight is closing the distance rather than trading blows. Softer than a
+            // bandit and a lighter hit, because the hits come from where a sword cannot
+            // answer them. The same leathers and the same drops, the bow first: it is what the
+            // archer was holding.
+            new MonsterSpec { Name = "BanditArcher", Title = "Bandit Archer", Weapon = "HuntingBow",
+                Hp = 40f, HpPerLevel = 13f, MoveSpeed = 3.6f, AtkSpeed = 1f, VisualRange = 16f,
+                Exp = 9f, ExpPerLevel = 2.5f, Gold = 3f, GoldPerLevel = 0.8f,
+                Characteristic = MonsterCharacteristic.Aggressive,
+                DamageMin = 3f, DamageMax = 6f, DamagePerLevel = 1.6f, HitDistance = 14f,
+                Missile = "ArrowMissile", MissileSpeed = 38f,
+                Loot = new[] { "HuntingBow", "BanditBoots", "BanditBracers", "BanditPauldron", "BanditHood", "BanditBreeches", "BanditJerkin" },
+                // A few arrows off every archer (2026-10-05, the user's call) - out of the quiver it
+                // wears, which is for show and never empties. About what a ranger spends bringing one down.
+                Spoils = "Arrow", SpoilsMin = 3, SpoilsMax = 5 },
             new MonsterSpec { Name = "Marauder", Title = "Marauder", Weapon = "IronLongsword",
                 Hp = 95f, HpPerLevel = 26f, MoveSpeed = 3.2f, AtkSpeed = 0.7f, VisualRange = 15f,
                 Exp = 18f, ExpPerLevel = 4f, Gold = 7f, GoldPerLevel = 1.2f,
+                Characteristic = MonsterCharacteristic.Aggressive,
                 // Plate and a longsword: the heaviest regular hit on the island, and the longest
                 // reach of the three human families.
                 DamageMin = 7f, DamageMax = 12f, DamagePerLevel = 3f, HitDistance = 1.8f, Token = "MarauderSeal",
                 Loot = new[] { "KnightSabatons", "KnightGauntlets", "KnightPauldrons", "KnightHelm", "KnightGreaves", "KnightCuirass", "IronLongsword" } },
+            // Casters since 2026-10-05 (user: in wizard's robes with a staff they "don't use any
+            // magic"). Until then they walked up and swung the staff like a club - the staff
+            // became a melee weapon for the player mage on 2026-09-23 and they went with it. Now
+            // they hang back like the archers and throw a violet bolt every couple of seconds
+            // (the cast is the body's, DemoCharacterBuilder.Casts), and every so often stand and
+            // work Withering Hex (DemoSkillBuilder), which a hit can break. A little shorter in
+            // reach than the archer, and a little softer per bolt than the old staff blow: it is
+            // Fire, which plate does not turn, and it comes from where a sword cannot answer it.
             new MonsterSpec { Name = "Cultist", Title = "Cultist", Weapon = "ApprenticeStaff",
                 Hp = 45f, HpPerLevel = 14f, MoveSpeed = 3.4f, AtkSpeed = 1.0f, VisualRange = 16f,
                 Exp = 16f, ExpPerLevel = 3.5f, Gold = 6f, GoldPerLevel = 1f,
-                DamageMin = 5f, DamageMax = 9f, DamagePerLevel = 2.2f, HitDistance = 1.6f, Token = "CultistSigil",
+                Characteristic = MonsterCharacteristic.Aggressive,
+                DamageMin = 4f, DamageMax = 8f, DamagePerLevel = 2f, HitDistance = 13f, Token = "CultistSigil",
+                // Slower than an arrow (38), so a bolt can be seen coming; still quick enough to
+                // land on anyone not already moving.
+                Missile = "ShadowBolt", MissileSpeed = 24f, Element = DemoCombatDataBuilder.Fire,
                 Loot = new[] { "WizardShoes", "WizardSleeves", "WizardTrousers", "WizardRobe", "ElderStaff" } },
             // The crypt's master. Five times a cultist's health at the same level and a
-            // faster staff, so at the level the crypt is pitched at - ten - the fight is
+            // faster cast, so at the level the crypt is pitched at - ten - the fight is
             // long enough to be a fight but no more dangerous a hit than a cultist's; the
             // danger is the guard that comes with him. He drops the mage's set at three
             // times the rate, robe first, since he is the one wearing the good one.
+            //
+            // He casts as his cultists do (2026-10-05) - he is the cultist male body scaled up, so
+            // his basic attack is the same spell flick and has to throw something. He swung the
+            // Elder Staff at two metres before.
             new MonsterSpec { Name = "Hierophant", Title = "Hierophant", Weapon = "ElderStaff",
                 Hp = 240f, HpPerLevel = 45f, MoveSpeed = 3.6f, AtkSpeed = 1.15f, VisualRange = 18f,
                 Exp = 135f, ExpPerLevel = 15f, Gold = 55f, GoldPerLevel = 6f,
+                Characteristic = MonsterCharacteristic.Aggressive,
                 // No harder a single blow than a cultist's, relative to the level the crypt is
                 // pitched at - the danger is his guard and his health, as the note above says.
-                DamageMin = 10f, DamageMax = 16f, DamagePerLevel = 4f, HitDistance = 2f, Token = "CultistSigil",
+                DamageMin = 10f, DamageMax = 16f, DamagePerLevel = 4f, HitDistance = 15f, Token = "CultistSigil",
+                Missile = "ShadowBolt", MissileSpeed = 24f, Element = DemoCombatDataBuilder.Fire,
                 Loot = new[] { "WizardRobe", "ElderStaff", "WizardSleeves", "WizardTrousers", "WizardShoes" }, LootRate = 0.30f },
             // The island's game. Not an enemy: a deer never fights, and `NoHarm` is how the
             // kit says so — it wanders, it can be shot, and it will not turn on the player.
-            // `DemoFlee` on the entity gives it the one thing the kit has no setting for,
+            // `FleeWhenHurt` on the entity gives it the one thing the kit has no setting for,
             // which is the sense to run once it has been hit.
             //
             // Cheap to kill and cheap to lose. The health is a couple of arrows' worth and
             // the experience deliberately slight, because hunting is meant to be a living
             // rather than a way to level: it is the hide and the venison that pay, and they
             // drop nearly every time, unlike armour off a body.
+            //
+            // 44 health at level one (30 until 2026-10-06): the biggest hit a fresh character
+            // lands is the warrior's Cleave at 24.9-40.1, then the mage's Arcane Bolt at
+            // 29.6-35.6, and both put a 30-health animal down in one cast. Under 44 nothing a
+            // level-one class has can do that without a critical (5%, x1.5). Re-measure it if
+            // a starting weapon, attribute or opening skill is tuned up.
             new MonsterSpec { Name = "Deer", Title = "Deer", Weapon = null,
-                Hp = 30f, HpPerLevel = 6f, MoveSpeed = 6.5f, AtkSpeed = 1f, VisualRange = 18f,
+                Hp = 44f, HpPerLevel = 6f, MoveSpeed = 6.5f, AtkSpeed = 1f, VisualRange = 18f,
                 Exp = 4f, ExpPerLevel = 1f, Gold = 0f, GoldPerLevel = 0f,
                 Characteristic = MonsterCharacteristic.NoHarm, Quarry = true,
                 Loot = new[] { "Venison", "DeerHide" }, LootRate = 0.85f },
@@ -324,18 +461,19 @@ namespace MultiplayerARPG.Demo.EditorTools
             // there was nothing between the green and it: the first enemy a player met was
             // whichever band they happened to walk into, several levels above them.
             //
-            // So the wolf is pitched deliberately below a bandit at every level: half the
-            // health, no weapon, and a bite rather than an axe. It is `Aggressive` where
-            // the people are `Normal`, which reverses who starts the fight - a bandit
-            // stands in its field until struck, a wolf comes at you - and that is the whole
-            // point of it. A low-level enemy nobody can find is not a low-level enemy. Its
-            // sight is kept short (12m against a bandit's 14) so that coming at you stays
-            // its decision from close by rather than a charge across the fields.
+            // So the wolf is pitched deliberately below a bandit at every level: four-fifths
+            // the health at level one (44 against 55; it was 28 until 2026-10-06, when a
+            // level-one Cleave or Arcane Bolt turned out to kill it in a single cast - see the
+            // deer above), no weapon, and a bite rather than an axe. It was the first thing on the
+            // island to be `Aggressive` (the people waited to be struck until 2026-10-02),
+            // because a low-level enemy nobody can find is not a low-level enemy. Its sight
+            // is kept short (12m against a bandit's 14) so that coming at you stays its
+            // decision from close by rather than a charge across the fields.
             //
             // No gold: a wolf has no pockets. What it leaves is off its own body, like the
             // deer's, and worth less - see BuildQuarry.
             new MonsterSpec { Name = "Wolf", Title = "Wolf", Weapon = null,
-                Hp = 28f, HpPerLevel = 8f, MoveSpeed = 4.2f, AtkSpeed = 1.15f, VisualRange = 12f,
+                Hp = 44f, HpPerLevel = 8f, MoveSpeed = 4.2f, AtkSpeed = 1.15f, VisualRange = 12f,
                 Exp = 6f, ExpPerLevel = 1.5f, Gold = 0f, GoldPerLevel = 0f,
                 Characteristic = MonsterCharacteristic.Aggressive, Quarry = true,
                 // Under a bandit here too, and a short reach because a bite is short. It starts
@@ -354,26 +492,205 @@ namespace MultiplayerARPG.Demo.EditorTools
             //
             // Pitched under the wolf it grows out of - a pup, not a wolf on a lead - so it
             // helps a level-one character without fighting for them.
+            //
+            // **Normal, not Aggressive.** An aggressive summon hunts every enemy and
+            // neutral within its summoned visual range of the owner, so the pup bolted at
+            // deer and wolves, ran past the kit's 10 m follow limit and was teleported
+            // back, over and over. Normal leaves it only the kit's notify path - what hits
+            // the owner, what the owner hits, and what hits the pup - which is the
+            // "fights whatever its owner fights" above. The prefab's
+            // `aggressiveWhileSummoned` has to be off as well (DemoWildlifeBuilder).
             new MonsterSpec { Name = "WolfPup", Title = "Wolf Pup", Weapon = null,
                 Hp = 22f, HpPerLevel = 7f, MoveSpeed = 4.6f, AtkSpeed = 1.2f, VisualRange = 10f,
                 Exp = 0f, ExpPerLevel = 0f, Gold = 0f, GoldPerLevel = 0f,
-                Characteristic = MonsterCharacteristic.Aggressive,
+                Characteristic = MonsterCharacteristic.Normal,
                 DamageMin = 2f, DamageMax = 4f, DamagePerLevel = 1.2f, HitDistance = 1.2f,
                 Loot = new string[0] },
         };
 
         /// <summary>
-        /// Health a monster gets back each second while it is being hit, once the rule's
-        /// percentage is cancelled out. The kit heals every character by a share of its
-        /// maximum health every second - a hundredth in the demo's rule - on top of the
-        /// `hpRecovery` stat, and it heals in a fight exactly as it does out of one. For
-        /// a character that is fine: it is how they get ready for the next fight. For a
-        /// monster with a big pool it is a wall: the Hierophant's 645 points came back
-        /// at seven and a half a second, which is a starter sword's whole output, and
-        /// the fight could not end. So each monster's `hpRecovery` is set to cancel the
-        /// share, base and per level, and leave this much.
+        /// The demo's gameplay rule, which replaces the kit's `SimpleGameplayRule` on the
+        /// demo's `GameplayRule.asset` - the same asset with its script swapped, so every
+        /// value on it (regen rates, swim speed, durability) stays where it was. What it
+        /// changes is in <see cref="MultiplayerARPG.CombatGameplayRule"/>: no health
+        /// regen for a few seconds after dealing or taking damage, for players and monsters
+        /// alike, and a gentler miss chance against higher-level targets.
+        ///
+        /// Monsters' `hpRecovery` used to be written as a negative number that cancelled the
+        /// rule's one-percent-a-second share down to half a point, because the kit healed in
+        /// a fight exactly as out of one and the Hierophant's 645 points came back at seven
+        /// and a half a second. The rule now stops regen in combat for everyone, so the cancel
+        /// is gone: a monster regens the rule's share like anyone else, but only once nobody
+        /// has hit it for <c>combatSeconds</c> - which is also what lets a monster that walks
+        /// home from a chase reset.
         /// </summary>
-        private const float MonsterRegenPerSecond = 0.5f;
+        private static void WriteGameplayRule()
+        {
+            var rule = AssetDatabase.LoadAssetAtPath<ScriptableObject>($"{GameDataDir}/GameplayRule.asset");
+            if (rule == null)
+            {
+                Debug.LogError($"[{nameof(DemoDatabaseWiring)}] {GameDataDir}/GameplayRule.asset is missing.");
+                return;
+            }
+            if (rule is MultiplayerARPG.CombatGameplayRule)
+                return;
+            var script = DemoScriptAssets.Of(typeof(MultiplayerARPG.CombatGameplayRule));
+            if (script == null)
+            {
+                Debug.LogError($"[{nameof(DemoDatabaseWiring)}] The rule keeps the kit's script: no script asset defines {nameof(MultiplayerARPG.CombatGameplayRule)}.");
+                return;
+            }
+            var serialized = new SerializedObject(rule);
+            serialized.FindProperty("m_Script").objectReferenceValue = script;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            // Changing a ScriptableObject's script destroys the old managed object and makes
+            // a new one for the same asset, so `rule` is dead from here on: touching it throws
+            // MissingReferenceException. Work with a fresh load.
+            rule = AssetDatabase.LoadAssetAtPath<ScriptableObject>($"{GameDataDir}/GameplayRule.asset");
+            if (!(rule is MultiplayerARPG.CombatGameplayRule))
+            {
+                Debug.LogError($"[{nameof(DemoDatabaseWiring)}] Swapping the gameplay rule's script did not take.");
+                return;
+            }
+            EditorUtility.SetDirty(rule);
+        }
+
+        /// <summary>Classes whose MP slot is rage, and focus (see <see cref="ClassPower"/>); the mage keeps mana.</summary>
+        private static readonly string[] RageClasses = { "Warrior" };
+        private static readonly string[] FocusClasses = { "Ranger" };
+
+        /// <summary>
+        /// Tells the rule which class keeps rage and which focus in its MP slot (2026-10-06, user's
+        /// call - WoW's model; see <see cref="ClassPower"/>). The class's own pool size is in
+        /// <see cref="Classes"/>.
+        ///
+        /// Runs after <see cref="WriteClasses"/> (the class assets) and <see cref="WriteGameplayRule"/>
+        /// (the rule's script), and writes every time rather than only on the script swap.
+        /// </summary>
+        private static void WriteClassPowers()
+        {
+            var rule = AssetDatabase.LoadAssetAtPath<ScriptableObject>($"{GameDataDir}/GameplayRule.asset");
+            if (!(rule is MultiplayerARPG.CombatGameplayRule))
+            {
+                Debug.LogError($"[{nameof(DemoDatabaseWiring)}] The gameplay rule is not the demo's; rage and focus are not wired.");
+                return;
+            }
+            var serialized = new SerializedObject(rule);
+            WriteClassList(serialized.FindProperty("rageClasses"), RageClasses);
+            WriteClassList(serialized.FindProperty("focusClasses"), FocusClasses);
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            EditorUtility.SetDirty(rule);
+        }
+
+        /// <summary>
+        /// Which classes may equip or use what (2026-10-06, user's call): World of Warcraft's
+        /// armour-weight rule - a class wears its own weight and anything lighter - with weapons by
+        /// class. Anything not listed is open to every class: the peasant clothes and the Wizard set
+        /// (cloth), the woodcutter's axe and miner's pick (tools every class starts with), bare hands.
+        ///
+        /// The Wizard set being cloth means a warrior or ranger can wear it, and its +20/+30 MP set
+        /// bonus then stretches their rage or focus bar a little. The user accepted that rather than
+        /// lock the set to the mage. Staves are the mage's, which keeps their Intelligence (8 MP a
+        /// point) off the other two.
+        /// </summary>
+        private static readonly (string[] Classes, string[] Items)[] ClassItems =
+        {
+            // Leather: the ranger's own weight, and the warrior's as the heavier class.
+            (new[] { "Ranger", "Warrior" }, new[] {
+                "RangerHood", "RangerJerkin", "RangerPauldron", "RangerBracers", "RangerBreeches", "RangerBoots",
+                "BanditHood", "BanditJerkin", "BanditPauldron", "BanditBracers", "BanditBreeches", "BanditBoots" }),
+            // Plate: the warrior alone.
+            (new[] { "Warrior" }, new[] {
+                "KnightHelm", "KnightCuirass", "KnightPauldrons", "KnightGauntlets", "KnightGreaves", "KnightSabatons" }),
+            // Weapons. The bandit's axe is only ever carried by bandits today; listed so it is a
+            // warrior's weapon if it is ever dropped or sold.
+            (new[] { "Warrior" }, new[] { "IronShortsword", "IronLongsword", "BanditAxe", "PaintedRoundShield" }),
+            (new[] { "Ranger" }, new[] { "HuntingBow", "YewLongbow" }),
+            (new[] { "Mage" }, new[] { "ApprenticeStaff", "ElderStaff" }),
+            // Restores only mana, which only the mage has (see ClassPower): drunk by a warrior it
+            // would be forty rage for twenty-five gold. Spiced Wine's six MP is left alone - it is
+            // mostly a drink.
+            (new[] { "Mage" }, new[] { "MinorManaPotion" }),
+        };
+
+        /// <summary>
+        /// Writes <see cref="ClassItems"/> onto each item's `requirement.availableClasses`, which the
+        /// kit checks when equipping (`CanEquip`) and using an item, and shows in the tooltip. **This is
+        /// the one owner of class restrictions**: an item under `Resources/Items` that the table does not
+        /// list has its restriction cleared, so taking an item out of the table opens it again.
+        ///
+        /// The kit checks only at the moment of equipping, so gear a saved character already wears
+        /// stays on until taken off. Runs after <see cref="WriteClasses"/>, which makes the classes.
+        /// </summary>
+        private static void WriteClassItems()
+        {
+            var wanted = new Dictionary<string, string[]>();
+            foreach (var entry in ClassItems)
+                foreach (string item in entry.Items)
+                    wanted[item] = entry.Classes;
+
+            int locked = 0, opened = 0;
+            foreach (string guid in AssetDatabase.FindAssets("t:ScriptableObject", new[] { $"{GameDataDir}/Resources/Items" }))
+            {
+                var item = AssetDatabase.LoadAssetAtPath<ScriptableObject>(AssetDatabase.GUIDToAssetPath(guid));
+                if (item == null)
+                    continue;
+                var serialized = new SerializedObject(item);
+                SerializedProperty classes = serialized.FindProperty("requirement.availableClasses");
+                if (classes == null)
+                    continue;
+                SerializedProperty single = serialized.FindProperty("requirement.availableClass");
+                if (single != null)
+                    single.objectReferenceValue = null;
+
+                if (wanted.TryGetValue(item.name, out string[] names))
+                {
+                    classes.arraySize = names.Length;
+                    for (int i = 0; i < names.Length; ++i)
+                    {
+                        PlayerCharacter entry = LoadClass(names[i]);
+                        if (entry == null)
+                            Debug.LogWarning($"[{nameof(DemoDatabaseWiring)}] Class {names[i]} is missing; {item.name} will not name it.");
+                        classes.GetArrayElementAtIndex(i).objectReferenceValue = entry;
+                    }
+                    wanted.Remove(item.name);
+                    ++locked;
+                }
+                else if (classes.arraySize > 0)
+                {
+                    classes.arraySize = 0;
+                    ++opened;
+                }
+                else
+                {
+                    continue;
+                }
+                serialized.ApplyModifiedPropertiesWithoutUndo();
+                EditorUtility.SetDirty(item);
+            }
+            foreach (string missing in wanted.Keys)
+                Debug.LogWarning($"[{nameof(DemoDatabaseWiring)}] {missing} is in the class table but not under Resources/Items.");
+            Debug.Log($"[{nameof(DemoDatabaseWiring)}] Class restrictions: {locked} items locked to classes, {opened} reopened to all.");
+        }
+
+        private static PlayerCharacter LoadClass(string name)
+        {
+            return AssetDatabase.LoadAssetAtPath<PlayerCharacter>($"{GameDataDir}/Resources/PlayerCharacters/{name}.asset");
+        }
+
+        private static void WriteClassList(SerializedProperty list, string[] names)
+        {
+            if (list == null)
+                return;
+            list.arraySize = names.Length;
+            for (int i = 0; i < names.Length; ++i)
+            {
+                PlayerCharacter entry = LoadClass(names[i]);
+                if (entry == null)
+                    Debug.LogWarning($"[{nameof(DemoDatabaseWiring)}] Class {names[i]} is missing; its MP stays mana.");
+                list.GetArrayElementAtIndex(i).objectReferenceValue = entry;
+            }
+        }
 
         /// <summary>
         /// How fast a character swims, as a share of its run speed. The demo's rule asset
@@ -397,20 +714,29 @@ namespace MultiplayerARPG.Demo.EditorTools
             EditorUtility.SetDirty(rule);
         }
 
-        /// <summary>The rule's percentage regen, read from the demo's rule so the cancel cannot drift from it.</summary>
-        private static float HpRecoveryRatePerSecond()
+        /// <summary>
+        /// How fast a character crouches, as a share of its run speed - set from the crouch
+        /// clips' own pace (`DemoAnimationSet.CrouchMoveSpeedRate`) so the feet keep up with the
+        /// ground. The kit's 0.35 was faster than the clips could step. Also what
+        /// `Refresh Crouch And Dash` calls.
+        /// </summary>
+        internal static void WriteCrouchSpeed()
         {
             var rule = AssetDatabase.LoadAssetAtPath<ScriptableObject>($"{GameDataDir}/GameplayRule.asset");
             if (rule == null)
-                return 0f;
-            SerializedProperty rate = new SerializedObject(rule).FindProperty("hpRecoveryRatePerSeconds");
-            return rate == null ? 0f : rate.floatValue;
+                return;
+            var serialized = new SerializedObject(rule);
+            SerializedProperty rate = serialized.FindProperty("moveSpeedRateWhileCrouching");
+            if (rate == null)
+                return;
+            rate.floatValue = DemoAnimationSet.CrouchMoveSpeedRate;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            EditorUtility.SetDirty(rule);
         }
 
         private static void WriteMonsters()
         {
             DemoItemBuilder.EnsureFolder($"{GameDataDir}/Resources/MonsterCharacters");
-            float regenRate = HpRecoveryRatePerSecond();
             foreach (MonsterSpec spec in Monsters)
             {
                 string path = $"{GameDataDir}/Resources/MonsterCharacters/{spec.Name}.asset";
@@ -427,8 +753,15 @@ namespace MultiplayerARPG.Demo.EditorTools
                 Stat(serialized, "stats.statsIncreaseEachLevel.hp", spec.HpPerLevel);
                 Stat(serialized, "stats.baseStats.moveSpeed", spec.MoveSpeed);
                 Stat(serialized, "stats.baseStats.atkSpeed", spec.AtkSpeed);
-                Stat(serialized, "stats.baseStats.hpRecovery", MonsterRegenPerSecond - spec.Hp * regenRate);
-                Stat(serialized, "stats.statsIncreaseEachLevel.hpRecovery", -spec.HpPerLevel * regenRate);
+                // No flat regen of its own: the rule's share, out of combat only - see WriteGameplayRule.
+                Stat(serialized, "stats.baseStats.hpRecovery", 0f);
+                Stat(serialized, "stats.statsIncreaseEachLevel.hpRecovery", 0f);
+                // What a critical is multiplied by - the players' 1.5 (WriteClasses). The rule floors
+                // the chance at 5% whatever `criRate` says, so every monster crits, and the field
+                // starts at 0: until 2026-10-06 one bite or bolt in twenty landed as a "critical"
+                // for nothing (seen on a level-one wolf in the LAN harness). The chance itself is
+                // left alone - the floor for all but the bandit, which keeps the kit template's 25%.
+                Stat(serialized, "stats.baseStats.criDmgRate", 1.5f);
                 Stat(serialized, "visualRange", spec.VisualRange);
 
                 // What it hits for, and how far it can reach to do it. Both were left at the
@@ -439,6 +772,8 @@ namespace MultiplayerARPG.Demo.EditorTools
                 Stat(serialized, "damageInfo.hitDistance", reach);
                 Stat(serialized, "damageInfo.hitFov", 90f);
                 Stat(serialized, "damageInfo.startAttackDistance", reach * 0.85f);
+                WriteMissile(serialized, spec, reach);
+                WriteElement(serialized, spec);
                 Stat(serialized, "damageAmount.amount.baseAmount.min", spec.DamageMin);
                 Stat(serialized, "damageAmount.amount.baseAmount.max", spec.DamageMax);
                 Stat(serialized, "damageAmount.amount.amountIncreaseEachLevel.min", spec.DamagePerLevel);
@@ -452,9 +787,6 @@ namespace MultiplayerARPG.Demo.EditorTools
                 Stat(serialized, "randomGold.baseAmount.max", Mathf.Round(spec.Gold * 1.3f));
                 Stat(serialized, "randomGold.amountIncreaseEachLevel.min", spec.GoldPerLevel);
                 Stat(serialized, "randomGold.amountIncreaseEachLevel.max", spec.GoldPerLevel);
-                SerializedProperty weapon = serialized.FindProperty("rightHandEquipItem");
-                if (weapon != null)
-                    weapon.objectReferenceValue = string.IsNullOrEmpty(spec.Weapon) ? null : Item(spec.Weapon);
                 SerializedProperty characteristic = serialized.FindProperty("characteristic");
                 if (characteristic != null)
                     characteristic.enumValueIndex = (int)spec.Characteristic;
@@ -468,8 +800,88 @@ namespace MultiplayerARPG.Demo.EditorTools
                 serialized.ApplyModifiedPropertiesWithoutUndo();
                 EditorUtility.SetDirty(asset);
 
-                WriteDrops(asset, spec.Loot, spec.LootRate > 0f ? spec.LootRate : 0.10f, spec.Quarry, spec.Token);
+                WriteDrops(asset, spec);
             }
+        }
+
+        /// <summary>
+        /// Rewrites every monster's drop table from its <see cref="MonsterSpec"/>, and nothing else of it -
+        /// the part of <see cref="Wire"/> a change to the loot needs. Returns how many tables changed.
+        /// Then `Build Map Server` for the MMO flow: drops are rolled on the server.
+        /// </summary>
+        [MenuItem("Open MMORPG/Demo/Refresh Monster Drops")]
+        public static void RefreshMonsterDropsMenu()
+        {
+            int changed = RefreshMonsterDrops();
+            Debug.Log($"[{nameof(DemoDatabaseWiring)}] Rewrote {changed} monster drop table(s). Run Build Map Server if the MMO flow is in use.");
+        }
+
+        internal static int RefreshMonsterDrops()
+        {
+            int changed = 0;
+            foreach (MonsterSpec spec in Monsters)
+            {
+                var asset = AssetDatabase.LoadAssetAtPath<MonsterCharacter>($"{GameDataDir}/Resources/MonsterCharacters/{spec.Name}.asset");
+                if (asset != null && WriteDrops(asset, spec))
+                    ++changed;
+            }
+            AssetDatabase.SaveAssets();
+            return changed;
+        }
+
+        private static bool WriteDrops(ScriptableObject monsterData, MonsterSpec spec)
+        {
+            return WriteDrops(monsterData, spec.Loot, spec.LootRate > 0f ? spec.LootRate : 0.10f, spec.Quarry, spec.Token,
+                              spec.Spoils, spec.SpoilsMin, spec.SpoilsMax);
+        }
+
+        /// <summary>
+        /// Makes a monster with a <see cref="MonsterSpec.Missile"/> shoot it out to
+        /// <paramref name="reach"/>, and every other one strike in reach of its hands. The
+        /// type is written both ways, so a family that stops shooting stops.
+        /// </summary>
+        private static void WriteMissile(SerializedObject serialized, MonsterSpec spec, float reach)
+        {
+            bool shoots = !string.IsNullOrEmpty(spec.Missile);
+            serialized.FindProperty("damageInfo.damageType").enumValueIndex =
+                (int)(shoots ? DamageType.Missile : DamageType.Melee);
+            if (!shoots)
+                return;
+            var missile = AssetDatabase.LoadAssetAtPath<MissileDamageEntity>($"{MissileDir}/{spec.Missile}.prefab");
+            if (missile == null)
+                Debug.LogError($"[{nameof(DemoDatabaseWiring)}] No missile \"{spec.Missile}\" under {MissileDir} for " +
+                               $"{spec.Title}, so it will loose nothing. Run Build Items first.");
+            serialized.FindProperty("damageInfo.missileDamageEntity").objectReferenceValue = missile;
+            Stat(serialized, "damageInfo.missileDistance", reach);
+            Stat(serialized, "damageInfo.missileSpeed", spec.MissileSpeed);
+        }
+
+        /// <summary>
+        /// The element of a monster's blows (<see cref="MonsterSpec.Element"/>). Null for the rest, which
+        /// the kit reads as the game's default, Physical - what every monster dealt before.
+        /// </summary>
+        private static void WriteElement(SerializedObject serialized, MonsterSpec spec)
+        {
+            DamageElement element = null;
+            if (!string.IsNullOrEmpty(spec.Element))
+            {
+                element = DemoCombatDataBuilder.Element(spec.Element);
+                if (element == null)
+                    Debug.LogError($"[{nameof(DemoDatabaseWiring)}] No \"{spec.Element}\" element for {spec.Title}, " +
+                                   "so its blows stay Physical. Run Build Combat Data first.");
+            }
+            serialized.FindProperty("damageAmount.damageElement").objectReferenceValue = element;
+        }
+
+        /// <summary>The item a monster family carries in its hand (see <see cref="MonsterSpec.Weapon"/>), or null.</summary>
+        internal static string MonsterWeapon(string monsterName)
+        {
+            foreach (MonsterSpec spec in Monsters)
+            {
+                if (spec.Name == monsterName)
+                    return string.IsNullOrEmpty(spec.Weapon) ? null : spec.Weapon;
+            }
+            return null;
         }
 
         /// <summary>Sets one stat, and says so if the kit has renamed the field.</summary>
@@ -502,19 +914,26 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// Game is the exception, and takes neither of those two: a deer is not carrying a
         /// bandit's token or a bottle of physic. It drops what came off its own body, and
         /// it drops it reliably, because a hunt that usually yields nothing is not a living.
+        ///
+        /// <paramref name="spoils"/>, if any, is dropped every time, on top: a rate of 1 makes it one of
+        /// the kit's certain drops, handed out before the roll. The kit counts it against the same 1-3,
+        /// though, so the range is raised by one to leave the rest of the loot as it was.
         /// </summary>
-        private static void WriteDrops(ScriptableObject monsterData, string[] loot, float rate, bool quarry = false, string token = null)
+        /// <returns>Whether anything changed.</returns>
+        private static bool WriteDrops(ScriptableObject monsterData, string[] loot, float rate, bool quarry = false, string token = null,
+                                       string spoils = null, int spoilsMin = 1, int spoilsMax = 1)
         {
             var serialized = new SerializedObject(monsterData);
             SerializedProperty list = serialized.FindProperty("itemDropManager.randomItems");
             if (list == null)
             {
                 Debug.LogError($"[{nameof(DemoDatabaseWiring)}] No drop list on {monsterData.name}.");
-                return;
+                return false;
             }
 
             int carried = quarry ? 0 : 2;
-            list.arraySize = carried + loot.Length;
+            bool certain = !string.IsNullOrEmpty(spoils);
+            list.arraySize = carried + loot.Length + (certain ? 1 : 0);
             if (!quarry)
             {
                 WriteDrop(list.GetArrayElementAtIndex(0), string.IsNullOrEmpty(token) ? "BanditInsignia" : token, 0.55f, 2);
@@ -522,18 +941,22 @@ namespace MultiplayerARPG.Demo.EditorTools
             }
             for (int i = 0; i < loot.Length; ++i)
                 WriteDrop(list.GetArrayElementAtIndex(carried + i), loot[i], Mathf.Max(0.025f, rate - i * rate * 0.12f), 1);
+            if (certain)
+                WriteDrop(list.GetArrayElementAtIndex(carried + loot.Length), spoils, 1f, Mathf.Max(1, spoilsMax), Mathf.Max(1, spoilsMin));
 
             // At most three of those at once, so a kill is a handful rather than a haul.
-            serialized.FindProperty("itemDropManager.minDropItems").intValue = 1;
-            serialized.FindProperty("itemDropManager.maxDropItems").intValue = 3;
-            serialized.ApplyModifiedPropertiesWithoutUndo();
-            EditorUtility.SetDirty(monsterData);
+            serialized.FindProperty("itemDropManager.minDropItems").intValue = certain ? 2 : 1;
+            serialized.FindProperty("itemDropManager.maxDropItems").intValue = certain ? 4 : 3;
+            bool changed = serialized.ApplyModifiedPropertiesWithoutUndo();
+            if (changed)
+                EditorUtility.SetDirty(monsterData);
+            return changed;
         }
 
-        private static void WriteDrop(SerializedProperty entry, string item, float rate, int most)
+        private static void WriteDrop(SerializedProperty entry, string item, float rate, int most, int least = 1)
         {
             entry.FindPropertyRelative("item").objectReferenceValue = Item(item);
-            entry.FindPropertyRelative("minAmount").intValue = 1;
+            entry.FindPropertyRelative("minAmount").intValue = least;
             entry.FindPropertyRelative("maxAmount").intValue = most;
             entry.FindPropertyRelative("minLevel").intValue = 0;
             entry.FindPropertyRelative("maxLevel").intValue = 1;
@@ -598,6 +1021,8 @@ namespace MultiplayerARPG.Demo.EditorTools
             {
                 Component<BaseMonsterCharacterEntity>($"{EntityDir}/DemoBanditMale.prefab"),
                 Component<BaseMonsterCharacterEntity>($"{EntityDir}/DemoBanditFemale.prefab"),
+                Component<BaseMonsterCharacterEntity>($"{EntityDir}/DemoBanditArcherMale.prefab"),
+                Component<BaseMonsterCharacterEntity>($"{EntityDir}/DemoBanditArcherFemale.prefab"),
                 Component<BaseMonsterCharacterEntity>($"{EntityDir}/DemoMarauderMale.prefab"),
                 Component<BaseMonsterCharacterEntity>($"{EntityDir}/DemoMarauderFemale.prefab"),
                 Component<BaseMonsterCharacterEntity>($"{EntityDir}/DemoCultistMale.prefab"),

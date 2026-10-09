@@ -63,6 +63,7 @@ namespace MultiplayerARPG.Demo.EditorTools
             BuildWeaponTypes();
             BuildArmorTypes();
             BuildWeapons();
+            BindToolIcons();
             BuildShield(bonesSetup);
             BuildArmour(bonesSetup);
             BuildConsumables();
@@ -70,6 +71,51 @@ namespace MultiplayerARPG.Demo.EditorTools
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();
             Debug.Log($"[{nameof(DemoItemBuilder)}] Built demo items.");
+        }
+
+        private const string WeaponIconDir = "Assets/OpenMMORPG/Demo/Textures/Icons/Weapons";
+
+        /// <summary>
+        /// Icons for the two gathering tools, which the Equipment Icon Generator (the
+        /// interactive tool every other weapon icon came from) has not been run on.
+        ///
+        /// Each gets one drawn from its prefab on the generator's diagonal, only if there is
+        /// none at its path - run the generator, or drop a PNG in, and that one stays.
+        /// Only fills an empty slot: an icon the generator has bound is left alone.
+        /// </summary>
+        private static void BindToolIcons()
+        {
+            string axeIcon = $"{WeaponIconDir}/WoodcuttersAxe_icon.png";
+            DemoMaterialIcons.EnsureWeaponIcon(axeIcon, $"{EquipmentDir}/WoodAxe.prefab");
+            BindWeaponIcon("WoodcuttersAxe", axeIcon);
+            string pickIcon = $"{WeaponIconDir}/MinersPick_icon.png";
+            DemoMaterialIcons.EnsureWeaponIcon(pickIcon, $"{EquipmentDir}/Pickaxe.prefab");
+            BindWeaponIcon("MinersPick", pickIcon);
+        }
+
+        private static void BindWeaponIcon(string itemName, string iconPath)
+        {
+            var item = Load<BaseItem>($"{ResourcesDir}/Items/{itemName}.asset");
+            if (item == null || item.Icon != null)
+                return;
+            var importer = AssetImporter.GetAtPath(iconPath) as TextureImporter;
+            if (importer != null && (importer.textureType != TextureImporterType.Sprite || !importer.alphaIsTransparency))
+            {
+                importer.textureType = TextureImporterType.Sprite;
+                importer.spriteImportMode = SpriteImportMode.Single;
+                importer.alphaIsTransparency = true;
+                importer.SaveAndReimport();
+            }
+            var sprite = AssetDatabase.LoadAssetAtPath<Sprite>(iconPath);
+            if (sprite == null)
+            {
+                Debug.LogWarning($"[{nameof(DemoItemBuilder)}] No icon at {iconPath} for {itemName}.");
+                return;
+            }
+            var serialized = new SerializedObject(item);
+            serialized.FindProperty("icon").objectReferenceValue = sprite;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            EditorUtility.SetDirty(item);
         }
 
         private static BaseEquipmentModelBonesSetupManager BuildBonesSetup()
@@ -113,6 +159,11 @@ namespace MultiplayerARPG.Demo.EditorTools
             new WeaponSpec { Name = "Sword", Title = "Sword", EquipType = WeaponItemEquipType.MainHandOnly,
                 HitDistance = 2.4f, HitFov = 90f, Damage = DamageType.Melee },
             new WeaponSpec { Name = "Axe", Title = "Axe", EquipType = WeaponItemEquipType.MainHandOnly,
+                HitDistance = 2.2f, HitFov = 80f, Damage = DamageType.Melee },
+            // The miner's tool (2026-09-25): rock and ore give to a pick and to nothing else
+            // (DemoHarvestBuilder). Swung like the axe - the animation builder gives any melee
+            // type the one-handed set - and reaches as far.
+            new WeaponSpec { Name = "Pickaxe", Title = "Pickaxe", EquipType = WeaponItemEquipType.MainHandOnly,
                 HitDistance = 2.2f, HitFov = 80f, Damage = DamageType.Melee },
             new WeaponSpec { Name = "Bow", Title = "Bow", EquipType = WeaponItemEquipType.TwoHand,
                 HitDistance = 2f, HitFov = 60f, Damage = DamageType.Missile,
@@ -258,6 +309,11 @@ namespace MultiplayerARPG.Demo.EditorTools
             // No mesh: the core is what you see, and it is two additive billboards rather
             // than the lit primitive sphere this used to be.
             BuildMissile("SpellBolt", null, 0.14f, DemoSkillEffectBuilder.Arcane, 0.16f, core: 0.20f);
+            // The cultists' (2026-10-05): the mage's bolt in the crypt's violet - the colour of the
+            // Hierophant's nova, so the cultists' magic and their master's read as one. ShadowBolt is
+            // their basic attack; HexBolt, fatter and brighter, is Withering Hex (DemoSkillBuilder).
+            BuildMissile("ShadowBolt", null, 0.14f, DemoSkillEffectBuilder.Unholy, 0.16f, core: 0.20f);
+            BuildMissile("HexBolt", null, 0.18f, DemoSkillEffectBuilder.Unholy, 0.24f, core: 0.30f);
         }
 
         private static void BuildMissile(string name, string modelPath, float radius,
@@ -338,17 +394,74 @@ namespace MultiplayerARPG.Demo.EditorTools
                 Model = "ShortSword", TypeAsset = "Sword", Min = 8f, Max = 12f, Price = 60, Weight = 2f },
             new ItemSpec { Name = "BanditAxe", Title = "Bandit Axe", Description = "Taken from the camp on the headland.",
                 Model = "Axe", TypeAsset = "Axe", Min = 10f, Max = 16f, Price = 80, Weight = 3f },
+            // The two gathering tools (2026-09-25): trees give only to an axe, rock and ore
+            // only to a pick, so every character starts with both in the pack
+            // (DemoDatabaseWiring) and Marek sells spares. Poor weapons on purpose - a
+            // woodsman's axe, not a bandit's - so they are carried for work, not for fights.
+            new ItemSpec { Name = "WoodcuttersAxe", Title = "Woodcutter's Axe", Description = "For felling trees. Swing it at a trunk and the timber goes straight in your pack.",
+                Model = "WoodAxe", TypeAsset = "Axe", Min = 5f, Max = 8f, Price = 30, Weight = 2.5f },
+            new ItemSpec { Name = "MinersPick", Title = "Miner's Pick", Description = "For breaking rock. Stone and ore give to nothing else.",
+                Model = "Pickaxe", TypeAsset = "Pickaxe", Min = 5f, Max = 8f, Price = 30, Weight = 3f },
             new ItemSpec { Name = "ApprenticeStaff", Title = "Apprentice Staff", Description = "The stone at its tip is still warm.",
                 // The weakest melee weapon in the game on purpose; it is a focus, not a club.
                 // Its Intelligence is written by DemoProgressionBuilder, which owns attributes.
                 Model = "MageStaff", TypeAsset = "Staff", Min = 5f, Max = 8f, Price = 100, Weight = 2.5f },
+            // Bows hit softer than the blade of the same tier, because they hit from fifteen
+            // metres. At 7-11 (until 2026-10-02) a level-one ranger's plain shot matched the
+            // warrior's swing, and Aimed Shot one-shot the wolves before they arrived.
             new ItemSpec { Name = "HuntingBow", Title = "Hunting Bow", Description = "Ash and sinew. Made for deer, not for men.",
-                Model = "Bow", TypeAsset = "Bow", Min = 7f, Max = 11f, Price = 70, Weight = 1.8f },
+                Model = "Bow", TypeAsset = "Bow", Min = 5f, Max = 8f, Price = 70, Weight = 1.8f },
             new ItemSpec { Name = "YewLongbow", Title = "Yew Longbow", Description = "Taller than the archer, and slow to draw.",
-                Model = "Bow", TypeAsset = "Bow", Min = 13f, Max = 19f, Price = 150, Weight = 2.4f },
+                Model = "Bow", TypeAsset = "Bow", Min = 9f, Max = 14f, Price = 150, Weight = 2.4f },
             new ItemSpec { Name = "ElderStaff", Title = "Elder Staff", Description = "Cut from a tree that was old when the island was settled.",
                 Model = "MageStaff", TypeAsset = "Staff", Min = 8f, Max = 12f, Price = 160, Weight = 3f },
         };
+
+        /// <summary>
+        /// How hard a swing works a tree, a rock or a mushroom - the same for every weapon,
+        /// because how well a *kind* of tool works a *kind* of node is the node's business
+        /// (`Harvestable.harvestEffectivenesses`: an axe at full strength on a tree, a sword
+        /// at a third) and a better sword is not a better axe.
+        ///
+        /// **This was zero on every weapon until 2026-09-25, so nothing on the island could
+        /// be harvested at all.** A harvestable does not take a weapon's damage: it takes
+        /// `WeaponItem.harvestDamageAmount` times the effectiveness
+        /// (`HarvestableEntity.ApplyReceiveDamage`), and that field is separate from the
+        /// damage every builder wrote. Every swing at a tree, boulder or mushroom did
+        /// nothing, silently - found in the harness while testing the iron veins, when
+        /// neither a vein nor an ordinary boulder lost a point to an axe.
+        ///
+        /// **Exactly ten, not a range.** The kit rounds each swing's yield down to a whole
+        /// number, so the node yields are tuned to come out whole at ten (see
+        /// the harvest builder's NodeSpec.Tools); a swing of nine would turn an axe's two logs into one.
+        /// </summary>
+        private static void WriteHarvestSwing(SerializedObject weapon)
+        {
+            weapon.FindProperty("harvestDamageAmount.baseAmount.min").floatValue = 10f;
+            weapon.FindProperty("harvestDamageAmount.baseAmount.max").floatValue = 10f;
+            weapon.FindProperty("harvestDamageAmount.amountIncreaseEachLevel.min").floatValue = 0f;
+            weapon.FindProperty("harvestDamageAmount.amountIncreaseEachLevel.max").floatValue = 0f;
+        }
+
+        /// <summary>Writes <see cref="WriteHarvestSwing"/> onto every weapon as it stands, without rebuilding the items.</summary>
+        [MenuItem("Open MMORPG/Demo/Fix Weapon Harvest Damage", priority = 152)]
+        public static void FixHarvestSwing()
+        {
+            int written = 0;
+            foreach (string guid in AssetDatabase.FindAssets("t:WeaponItem", new[] { ResourcesDir + "/Items" }))
+            {
+                var weapon = AssetDatabase.LoadAssetAtPath<WeaponItem>(AssetDatabase.GUIDToAssetPath(guid));
+                var serialized = new SerializedObject(weapon);
+                WriteHarvestSwing(serialized);
+                if (serialized.ApplyModifiedPropertiesWithoutUndo())
+                {
+                    EditorUtility.SetDirty(weapon);
+                    ++written;
+                }
+            }
+            AssetDatabase.SaveAssets();
+            Debug.Log($"[{nameof(DemoItemBuilder)}] Harvest damage written on {written} weapon(s).");
+        }
 
         private static void BuildWeapons()
         {
@@ -363,6 +476,7 @@ namespace MultiplayerARPG.Demo.EditorTools
                 serialized.FindProperty("damageAmount.amount.baseAmount.max").floatValue = spec.Max;
                 serialized.FindProperty("damageAmount.amount.amountIncreaseEachLevel.min").floatValue = spec.Min * 0.35f;
                 serialized.FindProperty("damageAmount.amount.amountIncreaseEachLevel.max").floatValue = spec.Max * 0.35f;
+                WriteHarvestSwing(serialized);
                 // Weapons are rigid props hung off the hand socket, not skinned.
                 //
                 // A bow is the exception, and it has to be the OFF hand. The archery clips
@@ -388,13 +502,105 @@ namespace MultiplayerARPG.Demo.EditorTools
                 Vector3 facing = IsBladed(spec.TypeAsset) ? BladeFacing : isBow ? BowFacing : Vector3.zero;
                 Vector3 seat = isBow ? BowSeat : Vector3.zero;
                 Vector3 gripPosition, gripEuler, gripScale;
-                ResolveGrip(spec.Name, facing, seat, out gripPosition, out gripEuler, out gripScale);
+                ResolveGrip(GripSource(spec.Name), facing, seat, out gripPosition, out gripEuler, out gripScale);
                 WriteModel(serialized, "equipmentModels", socket, $"{EquipmentDir}/{spec.Model}.prefab", null,
                            gripEuler, gripPosition, gripScale);
+                WriteSheathModel(serialized, spec.TypeAsset, spec.Model);
                 serialized.ApplyModifiedPropertiesWithoutUndo();
                 EditorUtility.SetDirty(item);
                 DemoAudioWiring.WireWeaponItem(item);
             }
+        }
+
+        /// <summary>
+        /// Where the item rides while it is put away: the same prefab as in the hand, on the
+        /// back socket (the left shoulder's, for a bow), in the pose DemoSheathBuilder gives that
+        /// kind of weapon. A bow is a right-hand weapon to the kit however its mesh is socketed, so
+        /// it is `sheathModels` like the rest. See <see cref="DemoSheathBuilder"/> for why
+        /// everything is on the back.
+        ///
+        /// **A pose already on the item is kept** - an entry for the same socket and prefab keeps its
+        /// position and rotation - because it may have been set by hand: the user tuned both bows'
+        /// that way on 2026-10-05. Only <paramref name="overwritePose"/> (`Reset Weapon Sheath Poses`)
+        /// writes DemoSheathBuilder's pose over it.
+        ///
+        /// A bow also carries the quiver (`DemoSheathBuilder.TryQuiverCarry`) as the second entry of both
+        /// its lists, `sheathModels` and `equipmentModels`, in one pose: kept from the sheathed entry, so
+        /// that is the one to tune by hand.
+        /// </summary>
+        private static void WriteSheathModel(SerializedObject serialized, string weaponType, string prefabName, bool overwritePose = false)
+        {
+            if (!DemoSheathBuilder.TryCarry(weaponType, out string socket, out Vector3 position, out Vector3 euler))
+                return;
+            string prefabPath = $"{EquipmentDir}/{prefabName}.prefab";
+            bool quiver = DemoSheathBuilder.TryQuiverCarry(weaponType, out string quiverSocket, out Vector3 quiverPosition, out Vector3 quiverEuler);
+            string quiverPath = $"{EquipmentDir}/{DemoSheathBuilder.QuiverPrefab}.prefab";
+            if (!overwritePose)
+            {
+                // Both read before anything is written: rewriting entry 0 shrinks the list and loses entry 1.
+                SerializedProperty existing = serialized.FindProperty("sheathModels");
+                KeepPose(existing, 0, socket, prefabPath, ref position, ref euler);
+                if (quiver)
+                    KeepPose(existing, 1, quiverSocket, quiverPath, ref quiverPosition, ref quiverEuler);
+            }
+            WriteModel(serialized, "sheathModels", socket, prefabPath, null, euler, position, Vector3.one);
+            if (!quiver)
+                return;
+            // The quiver rides with the bow whether it is drawn or put away, in the same place, so the
+            // kit's swap at the draw does not move it. The sheathed set's entry is the one a hand edit
+            // is kept from; the hand set's copies it.
+            WriteModelAt(serialized, "sheathModels", 1, quiverSocket, quiverPath, quiverEuler, quiverPosition);
+            WriteModelAt(serialized, "equipmentModels", 1, quiverSocket, quiverPath, quiverEuler, quiverPosition);
+        }
+
+        /// <summary>Reads back the pose of an existing entry for this socket and prefab, if there is one.</summary>
+        private static void KeepPose(SerializedProperty models, int index, string socket, string prefabPath, ref Vector3 position, ref Vector3 euler)
+        {
+            if (models == null || models.arraySize <= index)
+                return;
+            SerializedProperty model = models.GetArrayElementAtIndex(index);
+            Object prefab = model.FindPropertyRelative("meshPrefab").objectReferenceValue;
+            if (model.FindPropertyRelative("equipSocket").stringValue != socket || prefab == null ||
+                AssetDatabase.GetAssetPath(prefab) != prefabPath)
+                return;
+            position = model.FindPropertyRelative("localPosition").vector3Value;
+            euler = model.FindPropertyRelative("localEulerAngles").vector3Value;
+        }
+
+        /// <summary>
+        /// Writes `sheathModels` onto the items already built, and the bows' quivers, and nothing else,
+        /// for <see cref="DemoSheathBuilder.BuildAll"/> and `Build Quiver`. The same call the full build
+        /// makes, so the two cannot disagree. Poses already there are kept unless <paramref name="overwritePoses"/>.
+        /// Returns how many items it changed.
+        /// </summary>
+        internal static int RefreshSheathModels(bool overwritePoses = false)
+        {
+            int written = 0;
+            foreach (ItemSpec spec in WeaponItems)
+            {
+                var item = AssetDatabase.LoadAssetAtPath<WeaponItem>($"{ResourcesDir}/Items/{spec.Name}.asset");
+                if (item == null)
+                    continue;
+                var serialized = new SerializedObject(item);
+                WriteSheathModel(serialized, spec.TypeAsset, spec.Model, overwritePoses);
+                if (serialized.ApplyModifiedPropertiesWithoutUndo())
+                {
+                    EditorUtility.SetDirty(item);
+                    ++written;
+                }
+            }
+            var shield = AssetDatabase.LoadAssetAtPath<ShieldItem>($"{ResourcesDir}/Items/PaintedRoundShield.asset");
+            if (shield != null)
+            {
+                var serialized = new SerializedObject(shield);
+                WriteSheathModel(serialized, "Shield", "VikingShield", overwritePoses);
+                if (serialized.ApplyModifiedPropertiesWithoutUndo())
+                {
+                    EditorUtility.SetDirty(shield);
+                    ++written;
+                }
+            }
+            return written;
         }
 
         /// <summary>
@@ -490,10 +696,25 @@ namespace MultiplayerARPG.Demo.EditorTools
             localScale = entry.localScale;
         }
 
+        /// <summary>
+        /// Whose captured grip an item uses. Its own, unless it has none and is held like an
+        /// item that does: the woodcutter's axe is the bandit's axe in steel, and the miner's pick
+        /// is built by DemoWeaponBuilder exactly as the axe is (same pack, standing on +Y, grip
+        /// at the same point from the butt), so both take the bandit axe's captured grip. A
+        /// capture of their own, saved from the AnimationEditing scene, replaces it.
+        /// </summary>
+        private static string GripSource(string itemName)
+        {
+            var overrides = AssetDatabase.LoadAssetAtPath<DemoWeaponGripOverrides>(DemoWeaponGripOverrides.AssetPath);
+            if (overrides != null && overrides.Find(itemName) != null)
+                return itemName;
+            return itemName == "WoodcuttersAxe" || itemName == "MinersPick" ? "BanditAxe" : itemName;
+        }
+
         /// <summary>Weapons with a cutting edge, which care which way round the blade sits.</summary>
         private static bool IsBladed(string weaponType)
         {
-            return weaponType == "Sword" || weaponType == "Axe";
+            return weaponType == "Sword" || weaponType == "Axe" || weaponType == "Pickaxe";
         }
 
         private static void BuildShield(BaseEquipmentModelBonesSetupManager bonesSetup)
@@ -514,6 +735,7 @@ namespace MultiplayerARPG.Demo.EditorTools
             ResolveGrip("PaintedRoundShield", ShieldFacing, Vector3.zero, out shieldPosition, out shieldEuler, out shieldScale);
             WriteModel(serialized, "equipmentModels", SocketLeftHand, $"{EquipmentDir}/VikingShield.prefab", null,
                        shieldEuler, shieldPosition, shieldScale);
+            WriteSheathModel(serialized, "Shield", "VikingShield");
             serialized.ApplyModifiedPropertiesWithoutUndo();
             EditorUtility.SetDirty(item);
         }
@@ -526,9 +748,28 @@ namespace MultiplayerARPG.Demo.EditorTools
             public string Model;
             public float Armour;
             public int Price;
+            /// <summary>
+            /// A copy of another piece in a palette's colours (see `DemoOutfitPaletteBuilder`): the
+            /// piece it is cut from, that outfit, and the palette. Empty for an outfit's own pieces.
+            /// </summary>
+            public string From, Outfit, Palette;
+            public string Description;
         }
 
-        private static readonly ArmourSpec[] ArmourItems =
+        /// <summary>
+        /// The bandits' black set (2026-10-05, the user's call): what the bandits wear and drop, the
+        /// ranger's set dyed black and **slightly worse than the one a player makes**. Every ranger piece
+        /// gets a copy - the same garment in `MI_Ranger_Bandit` - with four-fifths of its armour (the
+        /// tooltip rounds: a jerkin reads 6 against 8, a hood 3 against 4) at three-fifths of its price,
+        /// and, because durability is drawn from armour (`ArmourDurability`), a little less wear in it.
+        /// It has a set of its own, a step weaker than the ranger's (`DemoCombatDataBuilder`), and its
+        /// jerkin takes no gem (`DemoSuppliesBuilder` sockets the ranger's). The green set is made at the
+        /// Fletcher's Bench and the Craft window (`DemoProgressionBuilder`).
+        /// </summary>
+        private const float BanditArmourGrade = 0.8f;
+        private const float BanditPriceGrade = 0.6f;
+
+        private static readonly ArmourSpec[] ArmourItems = WithBanditSet(new[]
         {
             new ArmourSpec { Name = "PeasantTunic", Title = "Peasant Tunic", Slot = "Body", Model = "Male_Peasant_Body", Armour = 3f, Price = 25 },
             new ArmourSpec { Name = "PeasantSleeves", Title = "Peasant Sleeves", Slot = "Arms", Model = "Male_Peasant_Arms", Armour = 1f, Price = 15 },
@@ -553,31 +794,160 @@ namespace MultiplayerARPG.Demo.EditorTools
             new ArmourSpec { Name = "WizardSleeves", Title = "Wizard Sleeves", Slot = "Arms", Model = "Male_Wizard_Arms", Armour = 3f, Price = 70 },
             new ArmourSpec { Name = "WizardTrousers", Title = "Wizard Trousers", Slot = "Legs", Model = "Male_Wizard_Legs", Armour = 5f, Price = 100 },
             new ArmourSpec { Name = "WizardShoes", Title = "Wizard Shoes", Slot = "Feet", Model = "Male_Wizard_Feet", Armour = 3f, Price = 65 },
-        };
+        });
+
+        /// <summary>The table plus a bandit copy of every ranger piece - see <see cref="BanditArmourGrade"/>.</summary>
+        private static ArmourSpec[] WithBanditSet(ArmourSpec[] specs)
+        {
+            var all = new List<ArmourSpec>(specs);
+            foreach (ArmourSpec spec in specs)
+            {
+                if (!spec.Name.StartsWith("Ranger"))
+                    continue;
+                string piece = spec.Name.Substring("Ranger".Length);
+                all.Add(new ArmourSpec
+                {
+                    Name = "Bandit" + piece,
+                    Title = "Bandit " + piece,
+                    Slot = spec.Slot,
+                    Model = spec.Model,
+                    Armour = spec.Armour * BanditArmourGrade,
+                    Price = Mathf.RoundToInt(spec.Price * BanditPriceGrade),
+                    From = spec.Name,
+                    Outfit = "Ranger",
+                    Palette = DemoOutfitPaletteBuilder.Bandit,
+                    Description = $"A ranger's leathers, dyed black and patched by a bandit. Worn on the {spec.Slot.ToLowerInvariant()}.",
+                });
+            }
+            return all.ToArray();
+        }
 
         private static void BuildArmour(BaseEquipmentModelBonesSetupManager bonesSetup)
         {
             foreach (ArmourSpec spec in ArmourItems)
+                WriteArmour(spec, bonesSetup, $"{OutfitDir}/{spec.Model}.fbx");
+        }
+
+        private static ArmorItem WriteArmour(ArmourSpec spec, BaseEquipmentModelBonesSetupManager bonesSetup, string modelPath,
+                                             bool regenerateIcon = false)
+        {
+            var item = Create<ArmorItem>($"{ResourcesDir}/Items/{spec.Name}.asset");
+            var serialized = new SerializedObject(item);
+            WriteCommon(serialized, new ItemSpec
             {
-                var item = Create<ArmorItem>($"{ResourcesDir}/Items/{spec.Name}.asset");
-                var serialized = new SerializedObject(item);
-                WriteCommon(serialized, new ItemSpec
-                {
-                    Name = spec.Name,
-                    Title = spec.Title,
-                    Description = $"Worn on the {spec.Slot.ToLowerInvariant()}.",
-                    Price = spec.Price,
-                    Weight = 1.5f,
-                });
-                serialized.FindProperty("armorType").objectReferenceValue =
-                    Load<ArmorType>($"{ResourcesDir}/ArmorTypes/{spec.Slot}.asset");
-                serialized.FindProperty("armorAmount.amount.baseAmount").floatValue = spec.Armour;
-                serialized.FindProperty("armorAmount.amount.amountIncreaseEachLevel").floatValue = spec.Armour * 0.2f;
-                // Skinned, so it is parented to the model root and rebound by bone name.
-                WriteModel(serialized, "equipmentModels", spec.Slot, $"{OutfitDir}/{spec.Model}.fbx", bonesSetup);
-                serialized.ApplyModifiedPropertiesWithoutUndo();
-                EditorUtility.SetDirty(item);
+                Name = spec.Name,
+                Title = spec.Title,
+                Description = spec.Description ?? $"Worn on the {spec.Slot.ToLowerInvariant()}.",
+                Price = spec.Price,
+                Weight = 1.5f,
+            });
+            serialized.FindProperty("armorType").objectReferenceValue =
+                Load<ArmorType>($"{ResourcesDir}/ArmorTypes/{spec.Slot}.asset");
+            serialized.FindProperty("armorAmount.amount.baseAmount").floatValue = spec.Armour;
+            serialized.FindProperty("armorAmount.amount.amountIncreaseEachLevel").floatValue = spec.Armour * 0.2f;
+            if (string.IsNullOrEmpty(spec.Palette))
+            {
+                // Skinned, so it is parented to the model root and rebound by bone name. The knight's cuirass is
+                // swapped for the copy that is skinned to ride with the greaves under it - see DemoOutfitFit.
+                WriteModel(serialized, "equipmentModels", spec.Slot, DemoOutfitFit.FitIfNeeded(modelPath), bonesSetup);
             }
+            else
+            {
+                // The same garment in the palette's colours, and the icon of the piece it was cut from,
+                // recoloured - with that piece's icon framing, so a re-render frames it the same.
+                GameObject garment = DemoOutfitPaletteBuilder.GarmentFor(
+                    AssetDatabase.LoadAssetAtPath<GameObject>(modelPath), spec.Outfit, spec.Palette);
+                if (garment != null)
+                    WriteModel(serialized, "equipmentModels", spec.Slot, AssetDatabase.GetAssetPath(garment), bonesSetup);
+                WritePaletteIcon(serialized, spec, regenerateIcon);
+            }
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            EditorUtility.SetDirty(item);
+            return item;
+        }
+
+        /// <summary>Where the armour icons are, as the Equipment Icon Generator writes them.</summary>
+        private const string ArmourIconDir = "Assets/OpenMMORPG/Demo/Textures/Icons/Armor";
+
+        private static void WritePaletteIcon(SerializedObject serialized, ArmourSpec spec, bool regenerate)
+        {
+            var source = AssetDatabase.LoadAssetAtPath<BaseItem>($"{ResourcesDir}/Items/{spec.From}.asset");
+            if (source == null)
+                return;
+            var from = new SerializedObject(source);
+            foreach (string field in new[] { "iconSettingsInitialized", "iconRotation", "iconZoom", "iconHalf", "iconLightingSettings" })
+            {
+                SerializedProperty property = from.FindProperty(field);
+                if (property != null)
+                    serialized.CopyFromSerializedProperty(property);
+            }
+            Object sourceIcon = from.FindProperty("icon").objectReferenceValue;
+            Sprite icon = DemoOutfitPaletteBuilder.IconFor(sourceIcon != null ? AssetDatabase.GetAssetPath(sourceIcon) : null,
+                                                           $"{ArmourIconDir}/{spec.Name}_icon.png", regenerate);
+            if (icon != null)
+                serialized.FindProperty("icon").objectReferenceValue = icon;
+            else
+                Debug.LogWarning($"[{nameof(DemoItemBuilder)}] No icon for {spec.Name}: {spec.From} has none to recolour.");
+        }
+
+        /// <summary>
+        /// Writes the armour that is a palette copy of another piece - the bandits' black set - and nothing
+        /// else, for `Build Bandit Set`: the full `Build Items` points every piece of armour back at the
+        /// library's models until `Collect Demo Art` runs again. Each copy's model is built from the model
+        /// its source piece wears now, collected or not. Adds them to the GameDatabase's item list.
+        /// </summary>
+        internal static List<ArmorItem> BuildPaletteArmour(bool regenerateIcons = false)
+        {
+            var bonesSetup = AssetDatabase.LoadAssetAtPath<BaseEquipmentModelBonesSetupManager>(BonesSetupPath);
+            var written = new List<ArmorItem>();
+            foreach (ArmourSpec spec in ArmourItems)
+            {
+                if (string.IsNullOrEmpty(spec.Palette))
+                    continue;
+                var source = AssetDatabase.LoadAssetAtPath<ArmorItem>($"{ResourcesDir}/Items/{spec.From}.asset");
+                SerializedProperty models = source != null ? new SerializedObject(source).FindProperty("equipmentModels") : null;
+                Object model = models != null && models.arraySize > 0
+                    ? models.GetArrayElementAtIndex(0).FindPropertyRelative("meshPrefab").objectReferenceValue
+                    : null;
+                string modelPath = model != null ? AssetDatabase.GetAssetPath(model) : $"{OutfitDir}/{spec.Model}.fbx";
+                written.Add(WriteArmour(spec, bonesSetup, modelPath, regenerateIcons));
+            }
+
+            var database = AssetDatabase.LoadAssetAtPath<ScriptableObject>($"{GameDataDir}/GameDatabase.asset");
+            if (database != null)
+            {
+                var serialized = new SerializedObject(database);
+                SerializedProperty items = serialized.FindProperty("items");
+                foreach (ArmorItem item in written)
+                {
+                    bool present = false;
+                    for (int i = 0; i < items.arraySize && !present; ++i)
+                        present = items.GetArrayElementAtIndex(i).objectReferenceValue == item;
+                    if (present)
+                        continue;
+                    items.arraySize++;
+                    items.GetArrayElementAtIndex(items.arraySize - 1).objectReferenceValue = item;
+                }
+                serialized.ApplyModifiedPropertiesWithoutUndo();
+                EditorUtility.SetDirty(database);
+            }
+            return written;
+        }
+
+        /// <summary>
+        /// Durability, repair, refining and dismantling for the palette armour only - the part of
+        /// <see cref="BuildUpkeep"/> the bandit set needs, so the rest of the gear is left as it is.
+        /// </summary>
+        internal static int BuildPaletteArmourUpkeep()
+        {
+            int written = 0;
+            foreach (ArmourSpec spec in ArmourItems)
+            {
+                if (!string.IsNullOrEmpty(spec.Palette) &&
+                    WriteUpkeep(spec.Name, spec.Price, ArmourDurability(spec.Armour), ArmourScrap(spec.Model)))
+                    ++written;
+            }
+            return written;
         }
 
         private static void BuildConsumables()
@@ -828,8 +1198,8 @@ namespace MultiplayerARPG.Demo.EditorTools
         }
 
         /// <summary>
-        /// What a blade or a bow breaks down into. Steel and stone on one side, wood and
-        /// horn on the other - the demo has no ingot, so `Stone` is its metal.
+        /// What a blade or a bow breaks down into: iron on one side, wood and horn on the
+        /// other. (Stone stood in for the metal until the island had iron, 2026-09-25.)
         /// </summary>
         private static string WeaponScrap(string weaponType)
         {
@@ -884,8 +1254,13 @@ namespace MultiplayerARPG.Demo.EditorTools
                 // three gold: a knight's cuirass came back as **thirty-one stone**, ten
                 // recipes' worth, which makes an afternoon at the quarry pointless. A
                 // better piece should yield more and no piece should yield a stockpile.
-                entry.FindPropertyRelative("amount").intValue =
-                    Mathf.Clamp(1 + price / 40, 1, 8);
+                entry.FindPropertyRelative("amount").intValue = scrap == ScrapMetal
+                    // Ingots are worth eight stones and are what the forge's recipes are
+                    // counted in, so they come back at about half what the piece took to
+                    // make - a longsword (four) returns two - never enough to make melting
+                    // down gear a cheaper mine than the hills.
+                    ? Mathf.Clamp(price / 60, 1, 4)
+                    : Mathf.Clamp(1 + price / 40, 1, 8);
             }
 
             serialized.ApplyModifiedPropertiesWithoutUndo();
@@ -894,7 +1269,7 @@ namespace MultiplayerARPG.Demo.EditorTools
         }
 
         /// <summary>What a piece of gear breaks down into: metal, wood or hide.</summary>
-        private const string ScrapMetal = "Stone";
+        private const string ScrapMetal = "IronIngot";
         private const string ScrapWood = "Timber";
         private const string ScrapHide = "Leather";
 
@@ -1077,6 +1452,38 @@ namespace MultiplayerARPG.Demo.EditorTools
             // Rigid props keep their own transform; skinned pieces get rebound instead.
             model.FindPropertyRelative("doNotSetupBones").boolValue = bonesSetup == null;
             model.FindPropertyRelative("equipmentModelBonesSetupManager").objectReferenceValue = bonesSetup;
+        }
+
+        /// <summary>
+        /// Writes one more rigid model into a list after <see cref="WriteModel"/> has written its first,
+        /// growing the list to reach it and leaving the entries before it alone.
+        /// </summary>
+        private static void WriteModelAt(SerializedObject serialized, string field, int index, string socket, string prefabPath,
+                                         Vector3 localEuler, Vector3 localPosition)
+        {
+            GameObject prefab = AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+            if (prefab == null)
+            {
+                Debug.LogError($"[{nameof(DemoItemBuilder)}] Missing equipment model \"{prefabPath}\".");
+                return;
+            }
+            SerializedProperty models = serialized.FindProperty(field);
+            if (models.arraySize <= index)
+                models.arraySize = index + 1;
+            // A grown list copies its last entry into the new one, so every setting is written, not only the pose.
+            SerializedProperty model = models.GetArrayElementAtIndex(index);
+            model.FindPropertyRelative("equipSocket").stringValue = socket;
+            model.FindPropertyRelative("meshPrefab").objectReferenceValue = prefab;
+            model.FindPropertyRelative("useInstantiatedObject").boolValue = false;
+            model.FindPropertyRelative("instantiatedObjectIndex").intValue = 0;
+            model.FindPropertyRelative("priority").intValue = 0;
+            model.FindPropertyRelative("localPosition").vector3Value = localPosition;
+            model.FindPropertyRelative("localEulerAngles").vector3Value = localEuler;
+            model.FindPropertyRelative("doNotChangeScale").boolValue = false;
+            model.FindPropertyRelative("localScale").vector3Value = Vector3.one;
+            model.FindPropertyRelative("useSpecificSheathEquipWeaponSet").boolValue = false;
+            model.FindPropertyRelative("doNotSetupBones").boolValue = true;
+            model.FindPropertyRelative("equipmentModelBonesSetupManager").objectReferenceValue = null;
         }
 
         private static T Create<T>(string path) where T : ScriptableObject

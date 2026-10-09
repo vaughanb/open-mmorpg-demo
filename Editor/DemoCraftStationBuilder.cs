@@ -101,7 +101,9 @@ namespace MultiplayerARPG.Demo.EditorTools
                 // interior is a furnished forge - anvil, bellows, whetstone, hammer rack -
                 // and a forge that is a room reads as a trade rather than as a prop.
                 Name = "Station_Forge", Title = "Forge", Anchor = "House_2/Interior/Anvil_Log",
-                Recipes = new[] { "IronShortsword", "IronLongsword", "PaintedRoundShield", "KnightHelm" },
+                // The ingot first: smelting is what the forge is for, and what every recipe
+                // under it needs.
+                Recipes = new[] { "IronIngot", "IronShortsword", "IronLongsword", "PaintedRoundShield", "KnightHelm" },
             },
             new Station
             {
@@ -115,7 +117,11 @@ namespace MultiplayerARPG.Demo.EditorTools
                 Position = new Vector3(-27.5f, 5.5f, 17.5f), Yaw = 300f,
                 // Not the bracers or the leather: those are field work - see
                 // DemoProgressionBuilder.Recipe.
-                Recipes = new[] { "HuntingBow", "YewLongbow", "RangerBoots", "RangerHood" },
+                // Arrows first: the bow is no use without them, and the recipe was missing
+                // from every list until 2026-10-03.
+                // The whole ranger set since 2026-10-05 (the jerkin, breeches and pauldron came only
+                // off bandits until then; the bandits drop a black copy now).
+                Recipes = new[] { "Arrow", "HuntingBow", "YewLongbow", "RangerHood", "RangerJerkin", "RangerBreeches", "RangerBoots", "RangerPauldron" },
             },
             new Station
             {
@@ -493,16 +499,16 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// </summary>
         private static void KeepLit(GameObject host, Station station)
         {
-            var torch = host.GetComponentInChildren<MultiplayerARPG.Demo.DemoTorch>(true);
+            var torch = host.GetComponentInChildren<MultiplayerARPG.TimeOfDayLight>(true);
             if (torch == null)
             {
                 Debug.LogWarning($"[{nameof(DemoCraftStationBuilder)}] {station.Title} should stay lit, " +
-                                 $"but \"{host.name}\" has no DemoTorch under it.");
+                                 $"but \"{host.name}\" has no TimeOfDayLight under it.");
                 return;
             }
-            if (torch.schedule == MultiplayerARPG.Demo.DemoTorch.Schedule.Always)
+            if (torch.schedule == MultiplayerARPG.TimeOfDayLight.Schedule.Always)
                 return;
-            torch.schedule = MultiplayerARPG.Demo.DemoTorch.Schedule.Always;
+            torch.schedule = MultiplayerARPG.TimeOfDayLight.Schedule.Always;
             EditorUtility.SetDirty(torch);
             Debug.Log($"[{nameof(DemoCraftStationBuilder)}] {station.Title}'s fire now burns around the " +
                       "clock; it was on the street torches' night schedule.");

@@ -73,6 +73,13 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// <see cref="Growth"/>), so a level is worth roughly: a Warrior +30 hp and +4 damage,
         /// a Mage +16 mp. Chosen so the Attributes tab visibly moves on every level rather
         /// than to balance anything - the demo has no balance to protect.
+        ///
+        /// **Stats and damage scale with points by two different mechanisms.** The kit
+        /// multiplies `statsIncreaseEachLevel` by the point count, so a stat written here is
+        /// per point as it stands. `increaseDamages` is an `IncrementalMinMaxFloat` evaluated
+        /// at the point count as a *level* - a base at one point plus an increment for each
+        /// point after - so <see cref="WriteAttribute"/> has to write the per-point value into
+        /// both fields. Written into the base alone it is a flat bonus (the 2026-10-02 bug).
         /// </summary>
         private struct AttributeSpec
         {
@@ -132,15 +139,20 @@ namespace MultiplayerARPG.Demo.EditorTools
 
         private static readonly Growth[] Growths =
         {
+            // No Intelligence for the warrior or the ranger since 2026-10-06: their MP slot is rage
+            // and focus (ClassPower), a flat 100, and Intelligence's 8 MP a point would stretch that
+            // bar a little more every few levels. It bought them nothing else. (Warrior was 1 +0.2,
+            // ranger 1 +0.3 a level.)
             new Growth { Character = "Warrior", Attribute = "Strength",     Base = 5f, PerLevel = 2.0f },
             new Growth { Character = "Warrior", Attribute = "Vitality",     Base = 4f, PerLevel = 1.5f },
             new Growth { Character = "Warrior", Attribute = "Dexterity",    Base = 2f, PerLevel = 0.5f },
-            new Growth { Character = "Warrior", Attribute = "Intelligence", Base = 1f, PerLevel = 0.2f },
 
             new Growth { Character = "Ranger",  Attribute = "Dexterity",    Base = 5f, PerLevel = 2.0f },
-            new Growth { Character = "Ranger",  Attribute = "Strength",     Base = 3f, PerLevel = 1.0f },
+            // Strength is the ranger's off-stat, as Dexterity is the warrior's. Attribute damage
+            // lands on every weapon, bows included, so at 3 +1/lvl (until 2026-10-02) Strength
+            // added more to a shot than the ranger's own Dexterity did.
+            new Growth { Character = "Ranger",  Attribute = "Strength",     Base = 2f, PerLevel = 0.5f },
             new Growth { Character = "Ranger",  Attribute = "Vitality",     Base = 3f, PerLevel = 1.0f },
-            new Growth { Character = "Ranger",  Attribute = "Intelligence", Base = 1f, PerLevel = 0.3f },
 
             new Growth { Character = "Mage",    Attribute = "Intelligence", Base = 5f, PerLevel = 2.0f },
             new Growth { Character = "Mage",    Attribute = "Vitality",     Base = 2f, PerLevel = 0.8f },
@@ -285,6 +297,10 @@ namespace MultiplayerARPG.Demo.EditorTools
             {
                 Name = "CraftArrows", Product = "Arrow", Amount = 20, Gold = 0,
                 Materials = new[] { "Timber" }, Counts = new[] { 1 },
+                // Unflagged until 2026-10-03: not "anywhere" and on no bench, so it could not
+                // be crafted at all. Field work, as the note above says, and also on the
+                // fletcher's bench (DemoCraftStationBuilder) where a ranger looks for it.
+                Anywhere = true,
             },
 
             // Timber, stone for the ring and a hide to carry it in. The one recipe whose
@@ -295,28 +311,45 @@ namespace MultiplayerARPG.Demo.EditorTools
             {
                 Name = "CraftCampfireKit", Product = "CampfireKit", Amount = 1, Gold = 15,
                 Materials = new[] { "Timber", "Stone", "Leather" }, Counts = new[] { 4, 2, 1 },
+                // Unflagged and on no station until 2026-10-03, so it could not be crafted at
+                // all. A kit you carry out and set down: made in the field, like the
+                // carpenter's bench kit.
+                Anywhere = true,
             },
 
             // ---- the forge ---------------------------------------------------
+            //
+            // Iron since 2026-09-25. These were made of stone before, because the island had
+            // no metal - iron swords and a knight's helm out of rock. Ore is dug from the
+            // veins in the southern hills (DemoHarvestBuilder) and smelted here into ingots,
+            // and the ironwork takes ingots. A vein gives about four ore, so two veins make
+            // a longsword: a trip into the hills for each piece of real gear.
             new Recipe
             {
+                // Timber for the fire. The forge's first recipe, so it is at the top of the list.
+                Name = "CraftIronIngot", Product = "IronIngot", Amount = 1, Gold = 0,
+                Materials = new[] { "IronOre", "Timber" }, Counts = new[] { 2, 1 },
+            },
+            new Recipe
+            {
+                // The painted boards are the shield; the iron is its boss and rim.
                 Name = "CraftRoundShield", Product = "PaintedRoundShield", Amount = 1, Gold = 40,
-                Materials = new[] { "Timber", "Stone" }, Counts = new[] { 4, 2 },
+                Materials = new[] { "Timber", "IronIngot" }, Counts = new[] { 4, 1 },
             },
             new Recipe
             {
                 Name = "CraftShortsword", Product = "IronShortsword", Amount = 1, Gold = 60,
-                Materials = new[] { "Stone", "Timber", "WolfFang" }, Counts = new[] { 3, 2, 1 },
+                Materials = new[] { "IronIngot", "Timber", "WolfFang" }, Counts = new[] { 2, 1, 1 },
             },
             new Recipe
             {
                 Name = "CraftLongsword", Product = "IronLongsword", Amount = 1, Gold = 110,
-                Materials = new[] { "Stone", "Timber", "Leather" }, Counts = new[] { 5, 2, 1 },
+                Materials = new[] { "IronIngot", "Timber", "Leather" }, Counts = new[] { 4, 1, 1 },
             },
             new Recipe
             {
                 Name = "CraftKnightHelm", Product = "KnightHelm", Amount = 1, Gold = 90,
-                Materials = new[] { "Stone", "Leather" }, Counts = new[] { 6, 2 },
+                Materials = new[] { "IronIngot", "Leather" }, Counts = new[] { 3, 2 },
             },
 
             // ---- the fletcher's bench ----------------------------------------
@@ -339,6 +372,27 @@ namespace MultiplayerARPG.Demo.EditorTools
             {
                 Name = "CraftRangerHood", Product = "RangerHood", Amount = 1, Gold = 35,
                 Materials = new[] { "Leather", "WolfPelt" }, Counts = new[] { 2, 1 },
+            },
+            // The rest of the ranger's set (2026-10-05). Until then the jerkin, breeches and pauldron
+            // came only off bandits; now the bandits drop a black copy a step worse (DemoItemBuilder
+            // .BanditArmourGrade) and the green set is what a player makes - the user could find no way
+            // to make the jerkin. Costed by the price, as the hood and boots are: the jerkin is the
+            // best piece and takes the most hide. Dismantling the bandits' copies at the smith gives
+            // leather back, so beating bandits is one road to the real thing.
+            new Recipe
+            {
+                Name = "CraftRangerJerkin", Product = "RangerJerkin", Amount = 1, Gold = 60,
+                Materials = new[] { "Leather", "WolfPelt" }, Counts = new[] { 4, 2 },
+            },
+            new Recipe
+            {
+                Name = "CraftRangerBreeches", Product = "RangerBreeches", Amount = 1, Gold = 45,
+                Materials = new[] { "Leather", "WolfPelt" }, Counts = new[] { 3, 1 },
+            },
+            new Recipe
+            {
+                Name = "CraftRangerPauldron", Product = "RangerPauldron", Amount = 1, Gold = 25,
+                Materials = new[] { "Leather", "WolfFang" }, Counts = new[] { 2, 1 },
             },
         };
 
@@ -460,9 +514,19 @@ namespace MultiplayerARPG.Demo.EditorTools
                 SerializedProperty entry = damages.GetArrayElementAtIndex(0);
                 // Left null on purpose - see the note on AttributeSpec.
                 entry.FindPropertyRelative("damageElement").objectReferenceValue = null;
+                // `amount` is an IncrementalMinMaxFloat evaluated at "level" = the character's
+                // points in the attribute: `baseAmount` at one point, plus
+                // `amountIncreaseEachLevel` for every point after. Until 2026-10-02 only the
+                // base was written, so Strength gave a flat +1.5-2.5 whatever the points: a
+                // level-twelve warrior with 27 Strength swung an 8-12 shortsword for 10-12,
+                // measured live, and the whole island read as spongy. Both fields carry the
+                // per-point value, so N points give N times it, as the spec means.
                 SerializedProperty amount = entry.FindPropertyRelative("amount.baseAmount");
                 amount.FindPropertyRelative("min").floatValue = spec.DamageMin;
                 amount.FindPropertyRelative("max").floatValue = spec.DamageMax;
+                SerializedProperty perPoint = entry.FindPropertyRelative("amount.amountIncreaseEachLevel");
+                perPoint.FindPropertyRelative("min").floatValue = spec.DamageMin;
+                perPoint.FindPropertyRelative("max").floatValue = spec.DamageMax;
             }
             else
             {
@@ -753,6 +817,17 @@ namespace MultiplayerARPG.Demo.EditorTools
             formulaList.arraySize = formulas.Count;
             for (int i = 0; i < formulas.Count; ++i)
                 formulaList.GetArrayElementAtIndex(i).objectReferenceValue = formulas[i];
+            // And the one recipe another builder owns, the carpenter's bench kit
+            // (DemoHomesteadBuilder). Rewriting the list from this table alone used to drop
+            // it on every run. Named by its path rather than swept up from the folder: a sweep
+            // also put back every recipe this table had dropped or renamed, stale product and
+            // all - and a row whose product is gone is what crashed the craft stations before.
+            var bench = AssetDatabase.LoadAssetAtPath<ItemCraftFormula>(DemoHomesteadBuilder.BenchFormulaPath);
+            if (bench != null && !formulas.Contains(bench))
+            {
+                formulaList.arraySize++;
+                formulaList.GetArrayElementAtIndex(formulaList.arraySize - 1).objectReferenceValue = bench;
+            }
 
             // Appended, never rewritten: the items list is 46 assets long and belongs to the
             // item and harvest builders. Anything already there is left exactly where it is.

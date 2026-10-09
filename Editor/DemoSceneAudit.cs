@@ -53,6 +53,7 @@ namespace MultiplayerARPG.Demo.EditorTools
             faults += AuditGroup(GameObject.Find("Nature/Rocks"), report, false);
             faults += AuditGroup(GameObject.Find("Nature/Shore"), report, false);
             faults += AuditColliders(report);
+            faults += AuditSceneObjectIds(report);
 
             if (faults == 0)
                 Debug.Log($"[{nameof(DemoSceneAudit)}] Scene placement clean.\n{report}");
@@ -155,6 +156,36 @@ namespace MultiplayerARPG.Demo.EditorTools
                     return true;
             }
             return false;
+        }
+
+        /// <summary>
+        /// Reports any two scene objects that would spawn under one id.
+        ///
+        /// A scene object is spawned by the hash of its `sceneObjectId`, which is saved on
+        /// the prefab and only filled in by the identity when it is empty - so a second
+        /// instance of one entity prefab silently inherits the first one's id, the server's
+        /// registry keeps one of the pair, and the other never exists at runtime. Marek and
+        /// Oswin spent a while as `DemoVillager_1` that way. Every placer now names its
+        /// ids; this is the check that catches the next one.
+        /// </summary>
+        private static int AuditSceneObjectIds(System.Text.StringBuilder report)
+        {
+            var seen = new Dictionary<int, LiteNetLibManager.LiteNetLibIdentity>();
+            int faults = 0;
+            foreach (LiteNetLibManager.LiteNetLibIdentity identity in
+                     Object.FindObjectsByType<LiteNetLibManager.LiteNetLibIdentity>(FindObjectsInactive.Include, FindObjectsSortMode.None))
+            {
+                if (identity.ForceNotSceneObject)
+                    continue;
+                if (seen.TryGetValue(identity.HashSceneObjectId, out LiteNetLibManager.LiteNetLibIdentity first))
+                {
+                    report.Append($"  scene id \"{identity.SceneObjectId}\" is on both {first.name} and {identity.name}; one of them never spawns\n");
+                    ++faults;
+                    continue;
+                }
+                seen[identity.HashSceneObjectId] = identity;
+            }
+            return faults;
         }
 
         /// <summary>

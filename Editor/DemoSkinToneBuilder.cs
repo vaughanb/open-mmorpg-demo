@@ -12,7 +12,7 @@ namespace MultiplayerARPG.Demo.EditorTools
     /// Skin could not be done the way hair was. The kit's body-part system recolours objects
     /// it instantiates as fake equipment, and skin is not one of those: it is on the
     /// character's own bare meshes, and it is also baked into the sleeves of three outfits
-    /// where the forearms show through. See <see cref="MultiplayerARPG.Demo.DemoSkinTone"/>,
+    /// where the forearms show through. See <see cref="MultiplayerARPG.SkinTone"/>,
     /// which is what actually paints it.
     ///
     /// What this tool contributes is **the numbers**. The body sheet and the outfit sheet are
@@ -100,6 +100,28 @@ namespace MultiplayerARPG.Demo.EditorTools
             public Color Mean;
             /// <summary>The brightest skin texel. What may be multiplied before anything clips.</summary>
             public Color Max;
+        }
+
+        /// <summary>
+        /// The components only, without the create-screen window. Build Character Entities
+        /// calls this, because it rebuilds the players from the kit's template, which has no
+        /// SkinTone. Without the component the slider hides its own window, and that is
+        /// how the skin choice disappeared on 2026-10-02.
+        /// </summary>
+        internal static int WritePlayerComponents()
+        {
+            Dictionary<string, Measured> measured = MeasureSkinMaterials();
+            if (measured.Count == 0)
+            {
+                Debug.LogError($"[{nameof(DemoSkinToneBuilder)}] Found no skin materials to measure; " +
+                               "the player bodies have no skin tone.");
+                return 0;
+            }
+            var clampReport = new System.Text.StringBuilder();
+            int bodies = WriteComponents(measured, ClampTones(measured, clampReport));
+            if (clampReport.Length > 0)
+                Debug.LogWarning($"[{nameof(DemoSkinToneBuilder)}] Skin tones clamped:{clampReport}");
+            return bodies;
         }
 
         [MenuItem("Open MMORPG/Demo/Build Skin Tones")]
@@ -410,10 +432,10 @@ namespace MultiplayerARPG.Demo.EditorTools
 
         private static int WriteComponents(Dictionary<string, Measured> means, Color[] tones)
         {
-            var skinMaterials = new List<MultiplayerARPG.Demo.DemoSkinTone.SkinMaterial>();
+            var skinMaterials = new List<MultiplayerARPG.SkinTone.SkinMaterial>();
             foreach (KeyValuePair<string, Measured> pair in means)
             {
-                skinMaterials.Add(new MultiplayerARPG.Demo.DemoSkinTone.SkinMaterial
+                skinMaterials.Add(new MultiplayerARPG.SkinTone.SkinMaterial
                 {
                     materialName = pair.Key,
                     measuredMean = pair.Value.Mean,
@@ -439,7 +461,7 @@ namespace MultiplayerARPG.Demo.EditorTools
                     // tone, and a component that can never be driven is one that only looks
                     // like it might do something.
                     var player = root.GetComponent<BasePlayerCharacterEntity>();
-                    var existing = root.GetComponent<MultiplayerARPG.Demo.DemoSkinTone>();
+                    var existing = root.GetComponent<MultiplayerARPG.SkinTone>();
                     if (player == null)
                     {
                         if (existing == null)
@@ -449,9 +471,9 @@ namespace MultiplayerARPG.Demo.EditorTools
                         continue;
                     }
 
-                    MultiplayerARPG.Demo.DemoSkinTone skin = existing != null
+                    MultiplayerARPG.SkinTone skin = existing != null
                         ? existing
-                        : root.AddComponent<MultiplayerARPG.Demo.DemoSkinTone>();
+                        : root.AddComponent<MultiplayerARPG.SkinTone>();
                     skin.skinMaterials = skinMaterials.ToArray();
                     skin.tones = (Color[])tones.Clone();
                     skin.toneTitles = titles;
@@ -542,9 +564,9 @@ namespace MultiplayerARPG.Demo.EditorTools
                 Slider slider = DemoCreateColumn.Build(window.transform, "ToneSlider",
                     new Vector2(10f, -78f), new Vector2(-10f, -58f), SliderFill, Tones.Length);
 
-                var driver = create.GetComponent<MultiplayerARPG.Demo.DemoSkinToneSlider>();
+                var driver = create.GetComponent<MultiplayerARPG.UISkinToneSlider>();
                 if (driver == null)
-                    driver = create.gameObject.AddComponent<MultiplayerARPG.Demo.DemoSkinToneSlider>();
+                    driver = create.gameObject.AddComponent<MultiplayerARPG.UISkinToneSlider>();
                 driver.slider = slider;
                 driver.label = label;
                 driver.swatch = swatch;

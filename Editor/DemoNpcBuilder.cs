@@ -37,6 +37,7 @@ namespace MultiplayerARPG.Demo.EditorTools
         private const string DialogDir = ResourcesDir + "/NpcDialogs";
         private const string QuestDir = ResourcesDir + "/Quests";
         private const string ConditionDir = ResourcesDir + "/NpcDialogConditions";
+        private const string QuestTaskDir = ResourcesDir + "/QuestTasks";
         private const string ItemDir = ResourcesDir + "/Items";
         private const string EntityDir = "Assets/OpenMMORPG/Demo/Prefabs/GamePlay/CharacterEntities";
 
@@ -61,6 +62,29 @@ namespace MultiplayerARPG.Demo.EditorTools
         private const float FacingCorrection = 180f;
 
         public static readonly Vector3 ElderLocalPosition = new Vector3(-2.5f, 0f, 2f);
+
+        /// <summary>
+        /// The carpenter stands at the homestead plot rather than in the village: the village
+        /// is a safe area, where the kit will not let anyone build, so the man who sells the
+        /// pieces waits where they can be put up. On the plot's west edge, on the path down
+        /// from the green, in the ring where the terrace blends back into the slope - clear
+        /// of the level ground players will want for foundations.
+        ///
+        /// Village-local like every other stand, worked out from the plot's world position;
+        /// the height is the levelled ground's, so run Level Homestead Plot and he stands on
+        /// it either way (it reseats him if he was placed first).
+        /// </summary>
+        public static Vector3 CarpenterLocalPosition
+        {
+            get
+            {
+                Vector2 plot = DemoIslandBuilder.HomesteadCentre + new Vector2(-6.5f, -4f);
+                Vector2 village = DemoIslandBuilder.VillageCentre;
+                return new Vector3(plot.x - village.x,
+                    DemoIslandBuilder.HeightAt(plot.x, plot.y) - DemoIslandBuilder.VillageHeight,
+                    plot.y - village.y);
+            }
+        }
 
         /// <summary>
         /// The pedlar stands behind his counter, a step back from the stall and a little
@@ -104,7 +128,7 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// the green, the foot of the tower on the east and the south side, and round
         /// again. Each point is snapped to the navmesh when placed, so a point that
         /// lands in a stall or a wall is nudged out rather than walked into. Edit them on
-        /// the guard's DemoPatrol component in the scene; this is only where he starts.
+        /// the guard's NpcPatrol component in the scene; this is only where he starts.
         /// </summary>
         public static readonly Vector3[] PatrolLocalRoute =
         {
@@ -178,11 +202,13 @@ namespace MultiplayerARPG.Demo.EditorTools
 
             Quest banditQuest = quests["ThinTheCamp"];
             NpcDialog venisonQuest = BuildQuestDialog(SpecOf("MeatForThePot"), quests["MeatForThePot"]);
+            NpcDialog forgeQuest = BuildQuestDialog(SpecOf("WordFromTheForge"), quests["WordFromTheForge"]);
 
             NpcDialog banker = BuildBankerDialogs();
             NpcDialog smith = BuildSmithDialogs();
             NpcDialog merchant = BuildMerchantDialog();
-            NpcDialog innkeeper = BuildInnkeeperDialog(banditQuest, venisonQuest, quests["MeatForThePot"]);
+            NpcDialog innkeeper = BuildInnkeeperDialog(banditQuest, venisonQuest, quests["MeatForThePot"],
+                forgeQuest, quests["WordFromTheForge"]);
             NpcDialog elder = BuildQuestDialog(SpecOf("ThinTheCamp"), banditQuest);
             // The two guards now open with a quest of their own rather than a passing remark;
             // each offer line carries the flavour the old one-liner did.
@@ -190,8 +216,9 @@ namespace MultiplayerARPG.Demo.EditorTools
                 BuildQuestDialog(SpecOf("WhatTheHillsHide"), quests["WhatTheHillsHide"]),
                 quests["WhatTheHillsHide"]);
             NpcDialog patrolGuard = BuildQuestDialog(SpecOf("WolvesAtTheFences"), quests["WolvesAtTheFences"]);
+            NpcDialog carpenter = BuildCarpenterDialog();
 
-            PlaceInScene(banker, smith, merchant, innkeeper, elder, towerGuard, patrolGuard);
+            PlaceInScene(banker, smith, merchant, innkeeper, elder, towerGuard, patrolGuard, carpenter);
             ClearNpcDatabase();
             ConfigureGameInstance();
 
@@ -225,8 +252,25 @@ namespace MultiplayerARPG.Demo.EditorTools
             /// <summary>Quest that must be finished first, by asset name. Null means no gate.</summary>
             public string RequireQuest;
             public QuestTaskType TaskType;
-            /// <summary>A MonsterCharacter asset name for a kill, an item name for a fetch.</summary>
+            /// <summary>
+            /// A MonsterCharacter asset name for a kill, an item name for a fetch, the NPC's entity
+            /// prefab name for a talk.
+            /// </summary>
             public string TaskTarget;
+            /// <summary>
+            /// For a kill of any of several kinds (`QuestTaskType.Custom`, written as a
+            /// <see cref="KillAnyMonsterQuestTask"/>): the MonsterCharacter asset names that count,
+            /// and what the tracker calls them together.
+            /// </summary>
+            public string[] TaskTargets;
+            public string TaskTitle;
+            /// <summary>
+            /// For a talk task: whom the tracker says to see, what they say when you do, the
+            /// player's answer that closes it, and a line on into their usual business.
+            /// </summary>
+            public string TalkTitle, TalkLine, TalkReply, TalkOnwardLine;
+            /// <summary>The NPC's own greeting by asset name, which the onward line leads back to.</summary>
+            public string TalkOnwardDialog;
             public int TaskAmount;
             public string[] RewardItems;
             public int[] RewardAmounts;
@@ -285,7 +329,10 @@ namespace MultiplayerARPG.Demo.EditorTools
                 Declined = "Then we wait, and we bar the doors at dusk.",
                 Completed = "You have done what we could not. Take this - it hung in my father's hall.",
                 Exp = 400, Gold = 250,
-                TaskType = QuestTaskType.KillMonster, TaskTarget = "BaseEnemy", TaskAmount = 8,
+                // Any of the camp's people, not only the plain bandit (2026-10-02): the archers
+                // and marauders stand in the same camp, and a kit kill task names one monster.
+                TaskType = QuestTaskType.Custom, TaskTitle = "Bandits",
+                TaskTargets = new[] { "BaseEnemy", "BanditArcher", "Marauder" }, TaskAmount = 8,
                 RewardItems = new[] { "PaintedRoundShield" }, RewardAmounts = new[] { 1 },
             },
             new QuestSpec
@@ -327,6 +374,41 @@ namespace MultiplayerARPG.Demo.EditorTools
                 AboutLine = "About the crypt...",
                 HandInLine = "The crypt is quiet now",
             },
+            // The demo's only Talk to NPC task (2026-09-26), the one quest kind the island had no
+            // use for. A there-and-back errand rather than one that finishes at the far end
+            // (`completeAfterTalked`), because that is what fits the menu lines every other quest
+            // uses: with `completeAfterTalked` the kit counts the task done the moment it is
+            // accepted (`CharacterQuest.GetProgress` returns 1 for it), so Hilde's hand-in line
+            // would come up before the player had left the alehouse. Sent the other way, the
+            // task is done exactly when Bram has been spoken to and the lines read true.
+            //
+            // It is also the island's first errand for a character who has not left the green,
+            // and it walks them past the forge, which nothing else sends them to.
+            new QuestSpec
+            {
+                Name = "WordFromTheForge", Title = "Word from the Forge",
+                Description = "Bram the smith has missed his supper three nights running. Ask him why at the forge, and bring Hilde his answer.",
+                DialogPrefix = "Forge", Speaker = "Hilde the Innkeeper",
+                Offer = "Bram has not been in for his supper three nights running, and that man has never missed a stew in his life. " +
+                        "The forge is across the green. Ask him what is wrong - he will not tell me, he only says he is busy.",
+                Accepted = "Thank you. And if he says he is busy, ask him busy with what.",
+                Declined = "Then I will go myself, and he will like that a good deal less.",
+                Completed = "The bellows! Three nights over a split bellows, and he could not walk thirty paces to say so. " +
+                            "Here, for your legs - and take a bowl yourself while I put the crust end by for him.",
+                Exp = 60, Gold = 30,
+                TaskType = QuestTaskType.TalkToNpc, TaskTarget = "DemoSmith",
+                TalkTitle = "Bram the Smith",
+                TalkLine = "Hilde sent you, did she. The bellows split down the seam three days back, and I have been stitching " +
+                           "leather by lamplight every night since - a forge that cannot breathe is a cold forge. Tell her I have " +
+                           "not been sulking. Tell her I will be in tomorrow, and to keep the crust end for me.",
+                TalkReply = "I will tell her",
+                TalkOnwardLine = "While I am here...",
+                TalkOnwardDialog = "SmithGreeting",
+                RewardItems = new[] { "Stew" }, RewardAmounts = new[] { 1 },
+                AskLine = "You look worried",
+                AboutLine = "About Bram...",
+                HandInLine = "Bram sent word",
+            },
         };
 
         /// <summary>Builds a quest asset from its spec. One task each; the demo needs no more.</summary>
@@ -363,7 +445,9 @@ namespace MultiplayerARPG.Demo.EditorTools
             SerializedProperty tasks = randomTasks.GetArrayElementAtIndex(0).FindPropertyRelative("tasks");
             tasks.arraySize = 1;
             SerializedProperty task = tasks.GetArrayElementAtIndex(0);
-            task.FindPropertyRelative("taskType").enumValueIndex = (int)spec.TaskType;
+            // The value, not enumValueIndex: Custom is 254, not the fourth entry, and an index
+            // past the end is dropped without a word - the task stayed a KillMonster.
+            task.FindPropertyRelative("taskType").intValue = (int)spec.TaskType;
             if (spec.TaskType == QuestTaskType.KillMonster)
             {
                 var monster = AssetDatabase.LoadAssetAtPath<MonsterCharacter>(
@@ -372,6 +456,17 @@ namespace MultiplayerARPG.Demo.EditorTools
                     Debug.LogError($"[{nameof(DemoNpcBuilder)}] Quest \"{spec.Name}\" wants monster \"{spec.TaskTarget}\", which is not there.");
                 task.FindPropertyRelative("monsterCharacterAmount.monster").objectReferenceValue = monster;
                 task.FindPropertyRelative("monsterCharacterAmount.amount").intValue = spec.TaskAmount;
+            }
+            else if (spec.TaskType == QuestTaskType.TalkToNpc)
+            {
+                SetTalkTask(task, spec);
+            }
+            else if (spec.TaskType == QuestTaskType.Custom)
+            {
+                // Cleared so a quest that used to be a kit kill task keeps no stale target.
+                task.FindPropertyRelative("monsterCharacterAmount.monster").objectReferenceValue = null;
+                task.FindPropertyRelative("monsterCharacterAmount.amount").intValue = 0;
+                task.FindPropertyRelative("customQuestTask").objectReferenceValue = BuildKillAnyTask(spec);
             }
             else
             {
@@ -391,6 +486,85 @@ namespace MultiplayerARPG.Demo.EditorTools
             serialized.ApplyModifiedPropertiesWithoutUndo();
             EditorUtility.SetDirty(quest);
             return quest;
+        }
+
+        /// <summary>
+        /// The task asset behind a kill of any of several kinds, named after its quest. See
+        /// <see cref="KillAnyMonsterQuestTask"/> for how the kit is made to record those kills.
+        /// </summary>
+        private static KillAnyMonsterQuestTask BuildKillAnyTask(QuestSpec spec)
+        {
+            DemoItemBuilder.EnsureFolder(QuestTaskDir);
+            var killAny = Create<KillAnyMonsterQuestTask>($"{QuestTaskDir}/{spec.Name}Kills.asset");
+            killAny.title = spec.TaskTitle;
+            killAny.amount = spec.TaskAmount;
+            var monsters = new List<MonsterCharacter>();
+            foreach (string name in spec.TaskTargets)
+            {
+                var monster = AssetDatabase.LoadAssetAtPath<MonsterCharacter>($"{ResourcesDir}/MonsterCharacters/{name}.asset");
+                if (monster == null)
+                    Debug.LogError($"[{nameof(DemoNpcBuilder)}] Quest \"{spec.Name}\" wants monster \"{name}\", which is not there.");
+                else
+                    monsters.Add(monster);
+            }
+            killAny.monsters = monsters.ToArray();
+            EditorUtility.SetDirty(killAny);
+            return killAny;
+        }
+
+        /// <summary>
+        /// Points a Talk to NPC task at an NPC, and writes what that NPC says when the player
+        /// arrives.
+        ///
+        /// **The kit knows the NPC by its prefab's network asset id**, not by the scene instance
+        /// or its name: `Quest.HaveToTalkToNpc` compares `npcEntityId` against
+        /// `NpcEntity.EntityId`, which is the identity's `HashAssetId`. So the target must be a
+        /// prefab no other NPC stands on - `DemoSmith` is Bram's alone. Two NPCs on one body
+        /// (Marek and Oswin share `DemoVillager`) would both answer.
+        ///
+        /// **The editor-only `npcEntity` reference is left empty on purpose.** When it is set,
+        /// `Quest.Validate` - which runs from `OnValidate`, so on load and in the inspector -
+        /// copies the id *and the title* off the prefab, and the prefab's `entityTitle` is
+        /// blank: every NPC is named on its scene instance (`PlaceInScene`). The tracker would
+        /// read "Talk to " with nobody after it. The id and title are written here instead,
+        /// and nothing overwrites them.
+        ///
+        /// **The talk dialog replaces the NPC's greeting until the quest is handed in**, not
+        /// only on the first visit (`PlayerCharacterNpcActionComponent` checks the quest, not
+        /// the task), so it carries a line on into the NPC's usual menu - otherwise Bram
+        /// could not mend anything for someone with the errand in their log.
+        /// </summary>
+        private static void SetTalkTask(SerializedProperty task, QuestSpec spec)
+        {
+            NpcEntity npc = NpcBody(spec.TaskTarget);
+            var identity = npc != null ? npc.GetComponent<LiteNetLibManager.LiteNetLibIdentity>() : null;
+            if (identity == null || string.IsNullOrEmpty(identity.AssetId))
+            {
+                Debug.LogError($"[{nameof(DemoNpcBuilder)}] Quest \"{spec.Name}\" talks to \"{spec.TaskTarget}\", " +
+                               "which has no network asset id. Run Build Character Entities first.");
+                return;
+            }
+
+            NpcDialog onward = Create<NpcDialog>($"{DialogDir}/{spec.TalkOnwardDialog}.asset");
+            var talk = Create<NpcDialog>($"{DialogDir}/{spec.DialogPrefix}QuestTalk.asset");
+            var serialized = new SerializedObject(talk);
+            serialized.FindProperty("title").stringValue = spec.TalkTitle;
+            serialized.FindProperty("description").stringValue = spec.TalkLine;
+            serialized.FindProperty("type").enumValueIndex = (int)NpcDialogType.Normal;
+            SetMenus(serialized, new[]
+            {
+                new MenuSpec { Title = spec.TalkReply, Close = true },
+                new MenuSpec { Title = spec.TalkOnwardLine, Dialog = onward },
+            });
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            EditorUtility.SetDirty(talk);
+
+            task.FindPropertyRelative("npcEntity").objectReferenceValue = null;
+            task.FindPropertyRelative("npcEntityId").intValue = identity.HashAssetId;
+            task.FindPropertyRelative("npcEntityTitle").stringValue = spec.TalkTitle;
+            task.FindPropertyRelative("npcEntityTitles").arraySize = 0;
+            task.FindPropertyRelative("talkToNpcDialog").objectReferenceValue = talk;
+            task.FindPropertyRelative("completeAfterTalked").boolValue = false;
         }
 
         /// <summary>The offer dialog, and the three replies hanging off it.</summary>
@@ -438,14 +612,14 @@ namespace MultiplayerARPG.Demo.EditorTools
         ///
         /// The four states do not overlap, so exactly one line shows (or none, for a finished
         /// quest that does not repeat - the kit hides that line by itself). "Under way" needs the
-        /// demo's own condition; see <see cref="DemoQuestUnfinishedCondition"/> for why the
+        /// demo's own condition; see <see cref="QuestUnfinishedCondition"/> for why the
         /// kit's `QuestOngoing` will not do. Every line goes to the same quest dialog.
         ///
         /// Put these first in the NPC's menu: the hand-in is the one a returning player wants.
         /// </summary>
         private static MenuSpec[] QuestMenus(QuestSpec spec, NpcDialog questDialog, Quest quest)
         {
-            var unfinished = Create<DemoQuestUnfinishedCondition>($"{ConditionDir}/{spec.DialogPrefix}QuestUnfinished.asset");
+            var unfinished = Create<QuestUnfinishedCondition>($"{ConditionDir}/{spec.DialogPrefix}QuestUnfinished.asset");
             if (unfinished.quest != quest)
             {
                 unfinished.quest = quest;
@@ -644,6 +818,8 @@ namespace MultiplayerARPG.Demo.EditorTools
                 "MinorHealingPotion", "MinorManaPotion", "IronShortsword", "PeasantTunic",
                 "PeasantTrousers", "PeasantShoes", "PeasantSleeves", "HorseWhistle",
                 "CampfireKit", "Arrow", "ScrollOfReturn",
+                // Spare gathering tools; every character starts with one of each.
+                "WoodcuttersAxe", "MinersPick",
                 "GemGarnet", "GemSapphire", "GemCitrine",
                 // Three hundred gold, which is more than a character has for a while. The
                 // pet is the one thing on his board worth saving for.
@@ -671,10 +847,68 @@ namespace MultiplayerARPG.Demo.EditorTools
         }
 
         /// <summary>
+        /// The carpenter on the homestead plot. He sells every piece of a house, which is the
+        /// quick way to one; the other is to make a bench in the field (the HUD's Craft
+        /// window) and have it make the rest from timber and stone. He also explains how the
+        /// pieces go together, because nothing else in the game does: a building kit sits in
+        /// the bag doing nothing until it is put on the hotbar and aimed, and the order the
+        /// pieces go up in is a rule the player has no way to guess.
+        /// </summary>
+        private static NpcDialog BuildCarpenterDialog()
+        {
+            var shop = Create<NpcDialog>($"{DialogDir}/CarpenterShop.asset");
+            var shopSerialized = new SerializedObject(shop);
+            shopSerialized.FindProperty("title").stringValue = "Kits";
+            shopSerialized.FindProperty("description").stringValue = "Cut, planed and bundled. You do the lifting.";
+            shopSerialized.FindProperty("type").enumValueIndex = (int)NpcDialogType.Shop;
+            SetSellItems(shopSerialized, DemoHomesteadBuilder.KitNames());
+            shopSerialized.ApplyModifiedPropertiesWithoutUndo();
+            EditorUtility.SetDirty(shop);
+
+            var howTo = Create<NpcDialog>($"{DialogDir}/CarpenterHowTo.asset");
+            var howToSerialized = new SerializedObject(howTo);
+            howToSerialized.FindProperty("title").stringValue = "Oswin the Carpenter";
+            howToSerialized.FindProperty("description").stringValue =
+                "Put a kit on your hotbar and use it: the piece follows your eye, green where it will stand and red where it won't. " +
+                "Click to set it down. [ and ] turn it.\n\n" +
+                "Foundation first, on the level ground here. Aim a wall at the edge of your floor and it snaps there; " +
+                "aim a door at a doorway's threshold. A roof goes up once every side has a wall. " +
+                "Chests and benches go on your floor or on open ground.\n\n" +
+                "Hold E on anything you have built to lock it and set a code, or to pull it down and get some of the wood back. " +
+                "Only you can build on your own foundation.";
+            howToSerialized.FindProperty("type").enumValueIndex = (int)NpcDialogType.Normal;
+            SetMenus(howToSerialized, new[]
+            {
+                new MenuSpec { Title = "Show me your kits", Dialog = shop },
+                new MenuSpec { Title = "I'll give it a go", Close = true },
+            });
+            howToSerialized.ApplyModifiedPropertiesWithoutUndo();
+            EditorUtility.SetDirty(howTo);
+
+            var greeting = Create<NpcDialog>($"{DialogDir}/CarpenterGreeting.asset");
+            var serialized = new SerializedObject(greeting);
+            serialized.FindProperty("title").stringValue = "Oswin the Carpenter";
+            serialized.FindProperty("description").stringValue =
+                "Level ground is hard to come by on this rock, so I cut some. Build yourself a house on it. " +
+                "Buy the pieces off me, or set a bench down and make them yourself from timber and stone.";
+            serialized.FindProperty("type").enumValueIndex = (int)NpcDialogType.Normal;
+            SetMenus(serialized, new[]
+            {
+                new MenuSpec { Title = "Show me your kits", Dialog = shop },
+                new MenuSpec { Title = "How does it go together?", Dialog = howTo },
+                new MenuSpec { Title = "Just looking", Close = true },
+            });
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            EditorUtility.SetDirty(greeting);
+            return greeting;
+        }
+
+        /// <summary>
         /// The innkeeper. Her shop sells the alehouse's food and drink, which is every
         /// provision the item builder makes, so adding a dish there puts it on her board.
         /// </summary>
-        private static NpcDialog BuildInnkeeperDialog(Quest quest, NpcDialog venisonQuest, Quest venison)
+        private static NpcDialog BuildInnkeeperDialog(Quest quest, NpcDialog venisonQuest, Quest venison,
+                                                      NpcDialog forgeQuest, Quest forge)
         {
             var board = Create<NpcDialog>($"{DialogDir}/InnkeeperBoard.asset");
             var boardSerialized = new SerializedObject(board);
@@ -731,9 +965,12 @@ namespace MultiplayerARPG.Demo.EditorTools
                 "Sit anywhere that is not the bench by the door, that one wobbles. You have the look of someone " +
                 "the elder wants a word with - but eat first. Hungry, or only thirsty?";
             serialized.FindProperty("type").enumValueIndex = (int)NpcDialogType.Normal;
-            // Her own errand first, one line per state of it (QuestMenus); none of them depends
-            // on Rowan's quest, so she offers it whatever his bandits are doing.
-            SetMenus(serialized, Concat(QuestMenus(SpecOf("MeatForThePot"), venisonQuest, venison), new[]
+            // Her own errands first, one line per state of each (QuestMenus); none of them depends
+            // on Rowan's quest, so she offers them whatever his bandits are doing. The forge
+            // errand leads because it is the one a character fresh off the boat can do.
+            MenuSpec[] errands = Concat(QuestMenus(SpecOf("WordFromTheForge"), forgeQuest, forge),
+                QuestMenus(SpecOf("MeatForThePot"), venisonQuest, venison));
+            SetMenus(serialized, Concat(errands, new[]
             {
                 new MenuSpec { Title = "What have you got?", Dialog = board },
                 new MenuSpec { Title = "What does the elder want?", Dialog = rumour,
@@ -929,9 +1166,22 @@ namespace MultiplayerARPG.Demo.EditorTools
                 SerializedProperty entry = items.GetArrayElementAtIndex(i);
                 entry.FindPropertyRelative("item").objectReferenceValue = LoadItem(itemNames[i]);
                 entry.FindPropertyRelative("level").intValue = 1;
-                entry.FindPropertyRelative("amount").intValue = 0;
-                // Zero means the shop charges the item's own price.
-                entry.FindPropertyRelative("sellPrice").intValue = 0;
+                // One per purchase, so the price shown is the price of one; the buy box asks
+                // how many. Zero is not "one": the kit sells a whole `MaxStack` for zero
+                // (`CmdBuyNpcItem`: `sellItem.amount > 0 ? sellItem.amount : item.MaxStack`),
+                // which with real prices sold ten foundation kits for the price of one - found
+                // in the harness the day prices went in, 2026-09-25.
+                entry.FindPropertyRelative("amount").intValue = 1;
+                // The price the shop charges, which is the item's own price - every builder
+                // sets that as what the thing should cost. **It has to be written here:** the
+                // entry's `sellPrice` is the only price the kit charges
+                // (`BaseGameplayRule.CurrenciesEnoughToBuyItem` / `DecreaseCurrenciesWhenBuyItem`)
+                // and the only one the shop list shows. Until 2026-09-25 this wrote 0 in the
+                // belief that 0 meant "use the item's price"; it meant free, in every shop on
+                // the island, and the list hid the price line because it was zero. The item's
+                // own `sellPrice` is what an NPC pays the *player* for one.
+                BaseItem sold = LoadItem(itemNames[i]);
+                entry.FindPropertyRelative("sellPrice").intValue = sold != null ? sold.SellPrice : 0;
             }
         }
 
@@ -951,7 +1201,7 @@ namespace MultiplayerARPG.Demo.EditorTools
         }
 
         private static void PlaceInScene(NpcDialog banker, NpcDialog smith, NpcDialog merchant, NpcDialog innkeeper,
-                                         NpcDialog elder, NpcDialog towerGuard, NpcDialog patrolGuard)
+                                         NpcDialog elder, NpcDialog towerGuard, NpcDialog patrolGuard, NpcDialog carpenter)
         {
             // One body per trade rather than four copies of the same villager: the keeper
             // of the strongbox in a warden's tabard, the elder in noble dress, the pedlar
@@ -999,6 +1249,8 @@ namespace MultiplayerARPG.Demo.EditorTools
                 new Stand { Name = "Rowan", Title = "Elder Rowan", Local = ElderLocalPosition, Yaw = Facing(ElderLocalPosition), Dialog = elder, Body = elderEntity },
                 new Stand { Name = "TowerGuard", Title = "Watchtower Guard", Local = TowerGuardLocalPosition, Yaw = DemoSceneBuilder.HouseYaw(DemoSceneBuilder.WatchtowerLayout), Dialog = towerGuard, Body = guardEntity },
                 new Stand { Name = "PatrolGuard", Title = "Town Guard", Local = PatrolLocalRoute[0], Yaw = Facing(PatrolLocalRoute[0]), Dialog = patrolGuard, Body = patrolEntity, Route = PatrolLocalRoute },
+                // Facing the green means facing up the path, toward whoever is coming down it.
+                new Stand { Name = "Oswin", Title = "Oswin the Carpenter", Local = CarpenterLocalPosition, Yaw = Facing(CarpenterLocalPosition), Dialog = carpenter, Body = villagerEntity },
             };
 
             // The map may already be the open scene; if not it is opened beside whatever
@@ -1048,9 +1300,9 @@ namespace MultiplayerARPG.Demo.EditorTools
                     npc.transform.rotation = Quaternion.Euler(0f, placement.Yaw, 0f);
                     if (placement.Route != null)
                     {
-                        var patrol = npc.GetComponent<MultiplayerARPG.Demo.DemoPatrol>();
+                        var patrol = npc.GetComponent<MultiplayerARPG.NpcPatrol>();
                         if (patrol == null)
-                            Debug.LogError($"[{nameof(DemoNpcBuilder)}] {placement.Name} has a route but no DemoPatrol component.");
+                            Debug.LogError($"[{nameof(DemoNpcBuilder)}] {placement.Name} has a route but no NpcPatrol component.");
                         else
                             patrol.waypoints = System.Array.ConvertAll(placement.Route, point => OnTheNavMesh(origin + point));
                     }
@@ -1063,6 +1315,7 @@ namespace MultiplayerARPG.Demo.EditorTools
                 serialized.FindProperty("startDialog").objectReferenceValue = placement.Dialog;
                 serialized.ApplyModifiedPropertiesWithoutUndo();
                 Pose(npc);
+                PinSceneObjectId(npc, "Npc@" + placement.Name);
             }
 
             EditorSceneManager.MarkSceneDirty(scene);
@@ -1070,6 +1323,29 @@ namespace MultiplayerARPG.Demo.EditorTools
             if (!wasOpen)
                 EditorSceneManager.CloseScene(scene, true);
             Debug.Log($"[{nameof(DemoNpcBuilder)}] {placed} NPC(s) placed, {placements.Length - placed} kept where they stood.");
+        }
+
+        /// <summary>
+        /// Gives a placed NPC a scene object id of its own, named after the stand.
+        ///
+        /// A scene object is spawned by the hash of its `sceneObjectId`, which is saved on
+        /// the **prefab**, and the identity's own `OnValidate` only fills an empty one in.
+        /// So two stands of one body shared the prefab's id - Marek and Oswin were both
+        /// `DemoVillager_1` - and `RegisterSceneObjects` keys by that hash, so the second
+        /// overwrote the first and one of them never existed at runtime. Named after the
+        /// stand rather than numbered so it is stable across runs; idempotent, so a rerun
+        /// over a scene that already has them changes nothing and the map server need not
+        /// be rebuilt for it. The same trap is written up in DemoShrineBuilder.
+        /// </summary>
+        private static void PinSceneObjectId(GameObject npc, string id)
+        {
+            var identity = npc.GetComponent<LiteNetLibManager.LiteNetLibIdentity>();
+            if (identity == null || identity.SceneObjectId == id)
+                return;
+            var serialized = new SerializedObject(identity);
+            serialized.FindProperty("sceneObjectId").stringValue = id;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            EditorUtility.SetDirty(npc);
         }
 
         /// <summary>A townsman's yaw: looking at the green from where he stands.</summary>

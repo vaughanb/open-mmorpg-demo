@@ -16,7 +16,7 @@ namespace MultiplayerARPG.Demo.EditorTools
     /// rates are what they are.
     ///
     /// Two sizes come out of the one recipe, a torch head and a campfire, differing only
-    /// in the numbers. Both carry a <see cref="DemoTorch"/> that keeps their hours.
+    /// in the numbers. Both carry a <see cref="TimeOfDayLight"/> that keeps their hours.
     /// </summary>
     public static class DemoFlameBuilder
     {
@@ -47,7 +47,7 @@ namespace MultiplayerARPG.Demo.EditorTools
             /// <summary>How high above the bed the light sits: in the body of the fire, not at its foot.</summary>
             public float LightHeight;
             public float Sway;
-            public DemoTorch.Schedule Schedule;
+            public TimeOfDayLight.Schedule Schedule;
         }
 
         private static readonly Recipe Torch = new Recipe
@@ -62,7 +62,7 @@ namespace MultiplayerARPG.Demo.EditorTools
             GlowSize = 0.55f,
             LightIntensity = 1.6f, LightRange = 7f, LightHeight = 0.12f,
             Sway = 0.03f,
-            Schedule = DemoTorch.Schedule.Night,
+            Schedule = TimeOfDayLight.Schedule.Night,
         };
 
         private static readonly Recipe Campfire = new Recipe
@@ -77,7 +77,7 @@ namespace MultiplayerARPG.Demo.EditorTools
             GlowSize = 1.3f,
             LightIntensity = 3.2f, LightRange = 13f, LightHeight = 0.55f,
             Sway = 0.06f,
-            Schedule = DemoTorch.Schedule.Night,
+            Schedule = TimeOfDayLight.Schedule.Night,
         };
 
         [MenuItem("Open MMORPG/Demo/Build Flame Effects")]
@@ -110,7 +110,7 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// given local offset, and returns the torch component so the caller can set
         /// its hours.
         /// </summary>
-        public static DemoTorch Light(string prefabPath, Transform holder, Vector3 localPosition, DemoTorch.Schedule schedule)
+        public static TimeOfDayLight Light(string prefabPath, Transform holder, Vector3 localPosition, TimeOfDayLight.Schedule schedule)
         {
             GameObject prefab = Flame(prefabPath);
             if (prefab == null)
@@ -121,7 +121,7 @@ namespace MultiplayerARPG.Demo.EditorTools
             var instance = (GameObject)PrefabUtility.InstantiatePrefab(prefab, holder);
             instance.transform.localPosition = localPosition;
             instance.transform.localRotation = Quaternion.identity;
-            var torch = instance.GetComponent<DemoTorch>();
+            var torch = instance.GetComponent<TimeOfDayLight>();
             torch.schedule = schedule;
             // Out or lit as the scene's preview hour says, so the saved scene is right
             // as built rather than after the first repaint.
@@ -249,7 +249,7 @@ namespace MultiplayerARPG.Demo.EditorTools
                 light.range = recipe.LightRange;
                 light.shadows = LightShadows.None;
 
-                var torch = root.AddComponent<DemoTorch>();
+                var torch = root.AddComponent<TimeOfDayLight>();
                 torch.lamp = light;
                 torch.flames = new[] { fire, embers, smoke, glow };
                 torch.intensity = recipe.LightIntensity;

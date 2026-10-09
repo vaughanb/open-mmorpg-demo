@@ -17,6 +17,10 @@ namespace MultiplayerARPG.Demo.EditorTools
     /// puts the kit's skill list, its requirements and its levelling in front of
     /// anyone who plays for ten minutes.
     ///
+    /// Since 2026-09-29 each class also has a passive (level two) and a toggle (level six),
+    /// the two kinds of skill the kit has that the island had no example of. See the
+    /// comment above the first of them in <see cref="Specs"/>.
+    ///
     /// The kit ships four skill classes and the demo uses three of them, deliberately,
     /// because a demo's job is to show what is there: <see cref="Skill"/> for the
     /// ordinary attacks, buffs and heals, <see cref="SimpleAreaAttackSkill"/> for the
@@ -39,10 +43,13 @@ namespace MultiplayerARPG.Demo.EditorTools
         private const string EntityDir = "Assets/OpenMMORPG/Demo/Prefabs/GamePlay/CharacterEntities";
         private const string MaterialDir = "Assets/OpenMMORPG/Demo/Materials";
         private const string AreaTexturePath = "Assets/OpenMMORPG/Demo/Textures/SkillArea.png";
+        private const string AimTexturePath = "Assets/OpenMMORPG/Demo/Textures/SkillAim.png";
 
         public const string Warrior = "Warrior";
         public const string Ranger = "Ranger";
         public const string Mage = "Mage";
+        /// <summary>Not a class: the owner of what every class has, which is the Attack button.</summary>
+        public const string Everyone = "Everyone";
 
         /// <summary>
         /// How high a skill can be taken with skill points. The kit's rule hands out one
@@ -59,6 +66,13 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// by casting the way a missile does.
         /// </summary>
         private const int DamageEntityLayer = 12;
+
+        /// <summary>
+        /// The layer the aiming circles sit on. TransparentFX is the one layer only the gameplay
+        /// camera draws - not the minimap's - and the kit leaves it out of every targeting and
+        /// ground mask, so the circle can never be clicked or stood on.
+        /// </summary>
+        private const int TransparentFxLayer = 1;
 
         /// <summary>What the skill does, which decides the asset class and how it is filled in.</summary>
         public enum Shape
@@ -82,6 +96,11 @@ namespace MultiplayerARPG.Demo.EditorTools
             Self,
             NearbyAllies,
             Ally,
+            /// <summary>
+            /// On the caster until pressed again: the kit's `Toggle`, a buff with no duration.
+            /// A stance, not a spell - see the three in <see cref="Specs"/>.
+            /// </summary>
+            Toggle,
         }
 
         public struct SkillSpec
@@ -113,10 +132,25 @@ namespace MultiplayerARPG.Demo.EditorTools
             public Shape Shape;
             /// <summary>The weapon type asset it needs equipped, or null for any.</summary>
             public string Weapon;
+            /// <summary>
+            /// Arrows a use takes from the quiver, through the kit's `RequireAmmoType.BasedOnWeapon`:
+            /// checked before the cast (an empty quiver refuses it with "No Ammo"), spent on the
+            /// server at the trigger, and the arrows' own damage added like a plain shot's. 0 is
+            /// none. Until 2026-10-03 every bow skill was a free shot.
+            /// </summary>
+            public int Arrows;
             public bool RequireShield;
 
             public int Mp;
             public int MpPerLevel;
+            /// <summary>
+            /// Share of the caster's MAX mana taken on top of <see cref="Mp"/> (the kit's
+            /// `consumeMpRate`, used for the real cost, the can-cast check and the tooltip alike).
+            /// A flat cost shrinks to nothing against a pool that grows 40 a level, which is how a
+            /// level-one mage's 10-mana bolt (5% of 184, back in two seconds of regen) never
+            /// moved the bar. 0 for everything that is not a mage attack spell.
+            /// </summary>
+            public float MpRate;
             public float Cooldown;
             /// <summary>Taken off the cooldown at each skill level.</summary>
             public float CooldownPerLevel;
@@ -134,7 +168,13 @@ namespace MultiplayerARPG.Demo.EditorTools
             public float Min;
             public float Max;
             public float PerLevel;
-            /// <summary>What the weapon's own damage is multiplied by. Zero means the skill does not use it.</summary>
+            /// <summary>
+            /// What the character's whole swing (weapon, Strength, buffs, refines) is multiplied
+            /// by - 1.25 is a hit and a quarter. Zero means the skill does not use the weapon.
+            /// Any skill with a rate runs on <see cref="MultiplayerARPG.SwingScaledWeaponSkill"/>:
+            /// the kit's own weapon skill multiplies the weapon item's raw damage, which sees no
+            /// Strength at all, and reads its rate as added on top (1.25 = 225%).
+            /// </summary>
             public float WeaponRate;
             public float WeaponRatePerLevel;
 
@@ -175,10 +215,30 @@ namespace MultiplayerARPG.Demo.EditorTools
             /// <summary>The tint the area entity's own particles take. Only read by the area skills.</summary>
             public Color AreaColour;
             /// <summary>
+            /// An area skill's own landing, from <see cref="DemoSkillEffectBuilder"/>: set off where
+            /// the area appears (AreaLandEffect), in place of the glowing disc and the spray every other
+            /// area lands with. Frost Nova's ice and frost are the ground it covers, drawn.
+            /// </summary>
+            public string LandEffect;
+            /// <summary>
             /// What plays on whoever it hit. Left null falls back to the game instance's
             /// own, which is the pale physical spark - see DemoSkillEffectBuilder.
             /// </summary>
             public string HitEffect;
+            /// <summary>
+            /// What goes off at the skill's trigger - the arrow leaving the string - rather than when
+            /// its animation starts, which is when the kit plays <see cref="ActivateEffect"/>. For a
+            /// bow that is the whole draw early. Played by BowEquipmentEntity from SkillReleaseEffects.
+            /// </summary>
+            public string ReleaseEffect;
+            /// <summary>Worn by whatever it hit for as long as the debuff lasts: the debuff's own `effects`.</summary>
+            public string DebuffEffect;
+            /// <summary>
+            /// Keeps the glowing disc under an area with a <see cref="LandEffect"/> of its own. Frost
+            /// Nova's ice is its ground, and drops the disc; Volley's arrows land across a patch that
+            /// still wants its edge shown for the three seconds it keeps biting.
+            /// </summary>
+            public bool KeepMarker;
 
             // ---- what it leaves behind ----------------------------------------
 
@@ -190,11 +250,28 @@ namespace MultiplayerARPG.Demo.EditorTools
             /// and was wrong for Frost Nova (a 4s slow meant five bites).
             /// </summary>
             public bool Burst;
+            /// <summary>
+            /// Seconds something takes to fall out of the sky onto the area: the meteor. Above zero
+            /// the area is a warning while it falls and bites once, when it lands; the strike is
+            /// DemoSkillEffectBuilder.AddMeteorStrike, and the skill's own sound (Meteor.wav) goes
+            /// with the fall rather than with the caster's hands. See <see cref="WriteAreaSkill"/>.
+            /// </summary>
+            public float FallSeconds;
             /// <summary>Movement taken off the victim, as a share: 0.4 is a 40% slow.</summary>
             public float SlowRate;
             /// <summary>Evasion taken off the victim, as a share.</summary>
             public float EvasionRate;
+            /// <summary>
+            /// Damage a second for as long as the debuff lasts, at skill level one, and what each
+            /// level after adds to it. **The kit's own field is not a rate**: a debuff's
+            /// `damageOverTimes` amount is the whole of the damage, paid out across the duration
+            /// (`CharacterSkillAndBuffComponent` applies `1 / duration * dt` of it a frame), so
+            /// <see cref="WriteDebuff"/> writes these times <see cref="BuffSeconds"/>. Until
+            /// 2026-10-05 it wrote them as they stood, and "4 a second" was 4 in all - found when
+            /// Withering Hex's curse ticked for 1.
+            /// </summary>
             public float DamagePerSecond;
+            public float DamagePerSecondPerLevel;
             public bool Stun;
             /// <summary>
             /// The kit's Freeze ailment for <see cref="BuffSeconds"/>: no moving, attacking,
@@ -205,11 +282,53 @@ namespace MultiplayerARPG.Demo.EditorTools
             public float Knockback;
 
             public BuffTo BuffTo;
+            /// <summary>
+            /// Always on once learned, and never pressed: the kit's Passive skill type, whose
+            /// `buff` stats are folded into the character's own. Costs nothing and has no clip.
+            /// </summary>
+            public bool Passive;
             public int HealHp;
             public int HealHpPerLevel;
             public int BuffDamage;
             public int BuffDamagePerLevel;
+            /// <summary>Movement added as a share of the ordinary speed; negative slows.</summary>
             public float BuffMoveRate;
+            public float BuffMoveRatePerLevel;
+            /// <summary>Flat stats on the buff (or the passive), at skill level one and per level after.</summary>
+            public float BuffHp, BuffHpPerLevel;
+            public float BuffMp, BuffMpPerLevel;
+            /// <summary>Mana back per second, on top of the class's own.</summary>
+            public float BuffMpRegen, BuffMpRegenPerLevel;
+            /// <summary>Armour against the default (physical) element. A knight's cuirass is 14.</summary>
+            public float BuffArmor, BuffArmorPerLevel;
+            /// <summary>
+            /// Block chance, as a share. The kit rolls at least 5% however low this is - a floor,
+            /// not a base that this adds to.
+            /// </summary>
+            public float BuffBlock, BuffBlockPerLevel;
+            /// <summary>
+            /// The share of a blocked blow that is stopped. **A block chance is nothing without
+            /// it:** the kit takes `damage * blockDmgRate` off a blocked hit
+            /// (`DefaultGameplayRule.GetBlockDamage`), floored at 5%, and the field is 0 on every
+            /// class, attribute and item - the same trap as the crit multiplier.
+            /// </summary>
+            public float BuffBlockDamage;
+            public float BuffCrit, BuffCritPerLevel;
+            /// <summary>Added to the critical hit multiplier.</summary>
+            public float BuffCritDamage, BuffCritDamagePerLevel;
+            /// <summary>
+            /// Mana taken per second for as long as a toggle is on. The kit drains it and never
+            /// switches the toggle off at zero - ToggleBuffUpkeep does.
+            /// </summary>
+            public int DrainMp;
+            /// <summary>
+            /// Takes the whole of the `mpRecovery` stat away while the buff is on - the part of mana
+            /// regeneration that attributes and gear give. The rule's own share (a percentage of the
+            /// pool) is not a stat and carries on.
+            /// </summary>
+            public bool StopsMpRegen;
+            /// <summary>The buff falls off when its wearer attacks, or is hit.</summary>
+            public bool BreaksOnAttack, BreaksWhenHit;
             /// <summary>How far a buff reaches from the caster, for the ones that catch a group.</summary>
             public float BuffDistance;
 
@@ -226,9 +345,16 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// The numbers are pitched against the island rather than picked: a bandit has 55
         /// health at level one and a marauder 95, and weapons do 8 to 20 a swing, so a
         /// level-one skill that lands about half again what a swing does is worth pressing
-        /// without making the ordinary attack pointless. The costs are pitched against the
-        /// classes' mana - a warrior has 30 at level one, a mage 120 - so the warrior gets
-        /// two or three skills out of a fight and the mage can keep casting.
+        /// without making the ordinary attack pointless.
+        ///
+        /// **`Mp` is whatever the class keeps in its MP slot** (2026-10-06, see `ClassPower`):
+        /// rage for the warrior, focus for the ranger, mana for the mage. Rage and focus are a
+        /// flat 100 at every level, so those costs are written against 100 and do not rise with
+        /// skill level (`MpPerLevel` 0); a cost of 0 is a free skill. Rage is earned in the fight
+        /// (about 10 a landed swing), so a warrior opens with an auto-attack or a free Charge, and
+        /// a toggle that cost rage could not be switched on before one. Focus refills at 6 a
+        /// second, so it paces shots rather than running dry. Mana grows with level and
+        /// Intelligence, so the mage's attack spells also take a share of the pool (`MpRate`).
         /// </summary>
         private static readonly SkillSpec[] Specs =
         {
@@ -237,7 +363,8 @@ namespace MultiplayerARPG.Demo.EditorTools
             new SkillSpec { Name = "Cleave", Title = "Cleave", Class = Warrior, LearnLevel = 1,
                 Description = "A wide swing that carries through everyone in front of you.",
                 Shape = Shape.Melee, Weapon = null,
-                Mp = 8, MpPerLevel = 2, Cooldown = 6f, CooldownPerLevel = 0.3f,
+                // 20 rage, WoW's Cleave: two landed swings' worth.
+                Mp = 20, MpPerLevel = 0, Cooldown = 6f, CooldownPerLevel = 0.3f,
                 WeaponRate = 1.25f, WeaponRatePerLevel = 0.15f, Min = 4f, Max = 7f, PerLevel = 2f,
                 // A wider arc than the sword's own 90 degrees, and half a metre further:
                 // this is the skill that hits the second bandit, and it has to reach him.
@@ -253,12 +380,28 @@ namespace MultiplayerARPG.Demo.EditorTools
                 // and then the blade sweeps sideways across the front, fastest at 0.78. The
                 // blow lands in that crossing, so 0.7 - between the two.
                 Clip = "Sword_Heavy_C", Trigger = 0.7f, Audio = DemoAudioWiring.SwordSwing,
+                // A steel ribbon off the blade for the length of the swing (2026-10-02, user's
+                // request); built by DemoSkillEffectBuilder.BuildWeaponTrails.
+                ActivateEffect = DemoSkillEffectBuilder.CleaveTrailName,
                 Glyph = Glyph.Slash },
+
+            // Each class has one passive and one toggle as well (2026-09-29): the kit's other two
+            // kinds of skill, which the island had no example of. The passive comes at level two,
+            // as the first thing a skill point can buy; the toggle at six, once there is enough
+            // mana to spend on keeping one up. Each toggle is a trade rather than a free upgrade -
+            // slower, fragile, or paid for by the second - because a stance with no cost is just
+            // a passive that has to be remembered.
+            new SkillSpec { Name = "Toughness", Title = "Toughness", Class = Warrior, LearnLevel = 2, Passive = true,
+                Description = "Years of taking the hit. More health, and armour that turns a little more of every blow.",
+                Shape = Shape.Support,
+                BuffHp = 15f, BuffHpPerLevel = 15f, BuffArmor = 4f, BuffArmorPerLevel = 4f,
+                Glyph = Glyph.Bastion },
 
             new SkillSpec { Name = "ShieldBash", Title = "Shield Bash", Class = Warrior, LearnLevel = 3,
                 Description = "Drives the shield into a single enemy and puts them on the ground.",
                 Shape = Shape.Melee, Weapon = null, RequireShield = true,
-                Mp = 10, MpPerLevel = 2, Cooldown = 12f, CooldownPerLevel = 0.6f,
+                // 10 rage, WoW's Shield Bash.
+                Mp = 10, MpPerLevel = 0, Cooldown = 12f, CooldownPerLevel = 0.6f,
                 WeaponRate = 0.6f, WeaponRatePerLevel = 0.1f,
                 Distance = 2.2f, Fov = 60f,
                 BuffSeconds = 1.5f, Stun = true, Knockback = 6f,
@@ -272,13 +415,22 @@ namespace MultiplayerARPG.Demo.EditorTools
                 // holds, creeping to its furthest point at 0.69 long after the blow. It has
                 // arrived by 0.18, so that is where the stun lands.
                 Clip = "Shield_OneShot", Trigger = 0.18f, Audio = DemoAudioWiring.ShieldBash,
+                // A short smear off the shield's rim through the thrust, not the hold after it.
+                ActivateEffect = DemoSkillEffectBuilder.ShieldBashTrailName,
                 Glyph = Glyph.Shield },
 
             new SkillSpec { Name = "Charge", Title = "Charge", Class = Warrior, LearnLevel = 5,
                 Description = "Closes the ground to your target at a run, and lands on arrival.",
                 Shape = Shape.Dash, Weapon = null,
-                Mp = 14, MpPerLevel = 3, Cooldown = 16f, CooldownPerLevel = 1f,
+                // Free, and it earns rage: the arrival hit is a blow paid for with nothing, so the
+                // rule credits it like a swing. WoW's Charge is how a warrior starts a fight with rage.
+                Mp = 0, MpPerLevel = 0, Cooldown = 16f, CooldownPerLevel = 1f,
                 Min = 10f, Max = 15f, PerLevel = 4f,
+                // The arrival shoves the target back (2026-10-01, user): a charge that
+                // stops dead at the enemy's toes read as a run that happened to end. Harder
+                // than Shield Bash's 6 - that one measured 0.85 m on a wolf - because this
+                // is the whole warrior arriving at eleven metres a second, not a shield.
+                Knockback = 9f,
                 // The warrior's answer to an archer. Twelve metres is a little under the
                 // bandits' 14-metre sight, so a charge begun on sight arrives.
                 Distance = 12f,
@@ -297,12 +449,38 @@ namespace MultiplayerARPG.Demo.EditorTools
                 // run starting. `Roll`'s 0.35 on a 1.47s clip meant half a second of
                 // winding up before anything moved, which is not what a charge is.
                 Clip = "Sprint_Shield_Loop", Trigger = 0.15f, Audio = DemoAudioWiring.PunchSwing,
+                // Dirt kicked up at the feet for as long as the run lasts; built by
+                // DemoSkillEffectBuilder.BuildChargeDust. Played when the clip starts, so it
+                // waits out the 0.15s to the trigger on its own.
+                ActivateEffect = DemoSkillEffectBuilder.ChargeDustName,
                 Glyph = Glyph.Chevrons },
+
+            new SkillSpec { Name = "DefensiveStance", Title = "Defensive Stance", Class = Warrior, LearnLevel = 6,
+                Description = "Guard up and feet set: much harder to hurt and quicker to block, but slow on your feet. " +
+                              "Press again to drop it.",
+                Shape = Shape.Support, BuffTo = BuffTo.Toggle,
+                // Free to switch, so it is a decision made per fight rather than per session - and it
+                // has to be: rage is empty out of combat, so a stance that cost rage could only be
+                // taken up after the fight had started. WoW's stances are free too.
+                Mp = 0, Cooldown = 3f,
+                // Twenty armour at level one is a knight's cuirass and a half, which takes about a
+                // sixth off every blow. Block: 15% of blows at level one (+3% a level), each of
+                // them halved. The halving is what makes the chance worth anything - see
+                // BuffBlockDamage; without it a block took 5% off and the stance's block was cosmetic.
+                BuffArmor = 20f, BuffArmorPerLevel = 5f, BuffBlock = 0.15f, BuffBlockPerLevel = 0.03f,
+                BuffBlockDamage = 0.5f,
+                BuffMoveRate = -0.3f,
+                // UAL2's guard: the sword comes up across the body and holds. The stance goes on
+                // about a third of the way in, as the guard comes up; nothing is thrown, so the
+                // exact frame matters less than it does for a swing.
+                Clip = "Sword_Block", Trigger = 0.35f,
+                Glyph = Glyph.Guard },
 
             new SkillSpec { Name = "RallyingCry", Title = "Rallying Cry", Class = Warrior, LearnLevel = 8,
                 Description = "A shout that puts weight behind every blade nearby, yours and your party's.",
                 Shape = Shape.Support, Weapon = null,
-                Mp = 18, MpPerLevel = 4, Cooldown = 45f, CooldownPerLevel = 1.5f,
+                // 10 rage, WoW's Battle Shout.
+                Mp = 10, MpPerLevel = 0, Cooldown = 45f, CooldownPerLevel = 1.5f,
                 BuffTo = BuffTo.NearbyAllies, BuffDistance = 14f, BuffSeconds = 20f,
                 BuffDamage = 4, BuffDamagePerLevel = 2, BuffMoveRate = 0.1f,
                 // UAL1's `Celebration` - both arms thrown up over the head - which reads as
@@ -328,41 +506,101 @@ namespace MultiplayerARPG.Demo.EditorTools
 
             new SkillSpec { Name = "AimedShot", Title = "Aimed Shot", Class = Ranger, LearnLevel = 1,
                 Description = "A drawn, deliberate shot. Slower than loosing, and worth it.",
-                Shape = Shape.Missile, Weapon = "Bow", Missile = "ArrowAimed",
-                Mp = 8, MpPerLevel = 2, Cooldown = 7f, CooldownPerLevel = 0.4f, Cast = 0.45f,
+                Shape = Shape.Missile, Weapon = "Bow", Arrows = 1, Missile = "ArrowAimed",
+                // 35 focus, WoW's Aimed Shot: a third of the bar, back in six seconds.
+                Mp = 35, MpPerLevel = 0, Cooldown = 7f, CooldownPerLevel = 0.4f,
                 WeaponRate = 1.6f, WeaponRatePerLevel = 0.2f,
                 Distance = 22f,
-                // Left on the bow's own joined draw-and-loose, so the arrow leaves the
-                // string where it is seen to; the draw stands in for the cast.
-                Clip = null, CastClip = "Bow_Charge", Glyph = Glyph.Arrow },
+                // The draw IS the cast, held a quarter of a second at full stretch while the
+                // arrowhead gathers light, and the shot is the release alone - which starts at
+                // full stretch and looses 0.175s in.
+                //
+                // Until 2026-09-25 this cast for 0.45s on the draw and then played the bow's whole
+                // joined shot, which begins with the arms at rest: the archer got 40% of the way
+                // into a draw, dropped the bow and drew again, and loosed 1.66s after the key. Now
+                // it looses at 1.59s and draws once.
+                Cast = DemoAnimationSet.BowDrawSeconds + 0.25f,
+                Clip = "Bow_Release", Trigger = DemoAnimationSet.ReleaseTrigger, CastClip = "Bow_Charge",
+                Glyph = Glyph.Arrow,
+                CastEffect = "FX_AimedDraw", ReleaseEffect = "FX_AimedRelease", HitEffect = "FX_HitAimed" },
+
+            new SkillSpec { Name = "KeenEye", Title = "Keen Eye", Class = Ranger, LearnLevel = 2, Passive = true,
+                Description = "An eye for the soft spot. Critical hits come more often, and land harder.",
+                Shape = Shape.Support,
+                BuffCrit = 0.03f, BuffCritPerLevel = 0.02f, BuffCritDamage = 0.1f, BuffCritDamagePerLevel = 0.05f,
+                Glyph = Glyph.Eye },
 
             new SkillSpec { Name = "CripplingShot", Title = "Crippling Shot", Class = Ranger, LearnLevel = 3,
                 Description = "Takes the legs out of whatever is running at you.",
-                Shape = Shape.Missile, Weapon = "Bow", Missile = "ArrowCrippling",
-                Mp = 10, MpPerLevel = 2, Cooldown = 12f, CooldownPerLevel = 0.5f,
+                Shape = Shape.Missile, Weapon = "Bow", Arrows = 1, Missile = "ArrowCrippling",
+                // 20 focus.
+                Mp = 20, MpPerLevel = 0, Cooldown = 12f, CooldownPerLevel = 0.5f,
                 WeaponRate = 0.9f, WeaponRatePerLevel = 0.1f,
                 Distance = 20f,
                 BuffSeconds = 5f, SlowRate = 0.4f,
-                Clip = null, Glyph = Glyph.SnareArrow },
+                // The bow's own shot, as quick as a plain one: this is the arrow loosed at
+                // something already running in. The roots at the victim's feet are the slow,
+                // there for exactly as long as it is. With no cast, the draw's glow and creak are
+                // the activate effect, which the kit plays as that shot's draw begins.
+                Clip = null, Glyph = Glyph.SnareArrow,
+                ActivateEffect = "FX_CripplingDraw",
+                ReleaseEffect = "FX_CripplingRelease", HitEffect = "FX_HitCrippling", DebuffEffect = "FX_Crippled" },
 
             new SkillSpec { Name = "Volley", Title = "Volley", Class = Ranger, LearnLevel = 5,
                 Description = "Arrows into a patch of ground, and keeps them coming.",
                 Shape = Shape.Area, Weapon = "Bow",
-                Mp = 20, MpPerLevel = 4, Cooldown = 20f, CooldownPerLevel = 0.8f, Cast = 0.6f,
+                // A fan of arrows goes up at the loose (FX_VolleyRelease), so it costs a handful.
+                Arrows = 5,
+                // 45 focus: the ranger's big one. With everything on cooldown the four shots cost
+                // about 10 focus a second against 6 back, so a long fight runs the bar down.
+                Mp = 45, MpPerLevel = 0, Cooldown = 20f, CooldownPerLevel = 0.8f,
                 Min = 6f, Max = 9f, PerLevel = 2f,
                 Distance = 18f, Radius = 4f,
                 BuffSeconds = 3f,
-                Clip = null, CastClip = "Bow_Charge", Glyph = Glyph.Volley,
-                AreaColour = DemoSkillEffectBuilder.Frost, HitEffect = "FX_HitPhysical" },
+                // Drawn and loosed HIGH (2026-09-25): `Bow_Draw_High`/`Bow_Release_High`, the bow's
+                // own pair leaned back to put the arrow up at 42-45 degrees (DemoAnimationSet.
+                // EnsureHighAngleClips). It used to shoot level, cast on half a draw, then draw
+                // again from rest - 1.8s to the loose; now 1.34s.
+                Cast = DemoAnimationSet.BowDrawSeconds,
+                Clip = "Bow_Release_High", Trigger = DemoAnimationSet.ReleaseTrigger, CastClip = "Bow_Charge_High",
+                Glyph = Glyph.Volley,
+                // A fan of arrows going up at the loose, and their rain coming down on the patch
+                // (FX_VolleyRain, set off where the area lands) in waves timed to its bites. Until
+                // 2026-09-25 there were no arrows in it at all, and the patch was Frost-blue.
+                CastEffect = "FX_VolleyDraw", ReleaseEffect = "FX_VolleyRelease", LandEffect = DemoSkillEffectBuilder.VolleyRainName, KeepMarker = true,
+                AreaColour = DemoSkillEffectBuilder.Timber, HitEffect = "FX_HitArrow" },
+
+            new SkillSpec { Name = "FleetOfFoot", Title = "Fleet of Foot", Class = Ranger, LearnLevel = 6,
+                Description = "Run light and fast across open country. It breaks the moment you loose an arrow or take a hit.",
+                Shape = Shape.Support, BuffTo = BuffTo.Toggle,
+                // Free, like WoW's Aspect of the Cheetah: it is a travel form, not a shot.
+                Mp = 0, Cooldown = 3f,
+                BuffMoveRate = 0.25f, BuffMoveRatePerLevel = 0.03f,
+                // A travelling pace, not a fighting one: without these it would simply make the
+                // ranger faster than everything on the island, forever. With them it gets you to
+                // the fight and ends there.
+                BreaksOnAttack = true, BreaksWhenHit = true,
+                // UAL1's lean into a sprint, which is exactly the gesture.
+                Clip = "Sprint_Enter", Trigger = 0.3f,
+                Glyph = Glyph.Stride },
 
             new SkillSpec { Name = "HuntersMark", Title = "Hunter's Mark", Class = Ranger, LearnLevel = 8,
                 Description = "Marks the quarry. It bleeds, and it stops being hard to hit.",
-                Shape = Shape.Missile, Weapon = "Bow", Missile = "ArrowMark",
-                Mp = 12, MpPerLevel = 2, Cooldown = 15f, CooldownPerLevel = 0.5f,
+                Shape = Shape.Missile, Weapon = "Bow", Arrows = 1, Missile = "ArrowMark",
+                // 15 focus.
+                Mp = 15, MpPerLevel = 0, Cooldown = 15f, CooldownPerLevel = 0.5f,
                 Min = 2f, Max = 4f, PerLevel = 1f,
                 Distance = 22f,
-                BuffSeconds = 10f, DamagePerSecond = 4f, EvasionRate = 0.25f,
-                Clip = null, Glyph = Glyph.Mark },
+                // The bleed is 4 damage in all at level one and 1 more a level - which is what it has
+                // always actually done, although this said "4 a second" until 2026-10-05 (see
+                // SkillSpec.DamagePerSecond). Kept as it plays rather than raised tenfold unasked: a
+                // real 4 a second is 40 a mark, a ranger balance call.
+                BuffSeconds = 10f, DamagePerSecond = 0.4f, DamagePerSecondPerLevel = 0.1f, EvasionRate = 0.25f,
+                // The mark itself hangs over the quarry for all ten seconds - it is the thing
+                // the party is meant to see - and the Bleeding it also leaves drips under it
+                // (DemoCombatDataBuilder).
+                Clip = null, Glyph = Glyph.Mark,
+                ReleaseEffect = "FX_MarkRelease", HitEffect = "FX_HitMark", DebuffEffect = "FX_HuntersMark" },
 
             // ---- Mage: the only class whose damage is its own rather than its weapon's ----
 
@@ -372,7 +610,14 @@ namespace MultiplayerARPG.Demo.EditorTools
             new SkillSpec { Name = "ArcaneBolt", Title = "Arcane Bolt", Class = Mage, LearnLevel = 1,
                 Description = "The first thing an apprentice learns, and the last thing they stop using.",
                 Shape = Shape.Missile, Weapon = "Staff", Missile = "SpellBolt",
-                Mp = 10, MpPerLevel = 3, Cooldown = 3f, CooldownPerLevel = 0.15f, Cast = 0.6f,
+                //
+                // Costs 10% of the pool on top of the flat 10 (2026-10-06): the user watched the
+                // mage cast and never saw the meter move. Flat 10 of 184 was 5%, and the mage's
+                // ~7 mana a second of regeneration (5.2 from the stat, 1.8 the rule's 1% of the
+                // pool) refilled it before the next cast was off cooldown. Now 28 at level one -
+                // 15% a bolt, about 2.3 a second more than it regenerates - and it keeps costing
+                // a tenth as the pool grows.
+                Mp = 10, MpRate = 0.10f, MpPerLevel = 3, Cooldown = 3f, CooldownPerLevel = 0.15f, Cast = 0.6f,
                 // Raised from 16-22 on 2026-09-23, when the staff stopped firing bolts of its
                 // own: the mage's damage now comes from its spells, on their cooldowns, with a
                 // weak staff swing between them. Intelligence adds to all three attacking
@@ -384,10 +629,18 @@ namespace MultiplayerARPG.Demo.EditorTools
                 CastEffect = "FX_ArcaneCast", ActivateEffect = "FX_ArcaneRelease",
                 HitEffect = "FX_HitArcane" },
 
+            new SkillSpec { Name = "DeepReserves", Title = "Deep Reserves", Class = Mage, LearnLevel = 2, Passive = true,
+                Description = "A deeper well to draw from. More mana, and it comes back faster.",
+                Shape = Shape.Support,
+                BuffMp = 15f, BuffMpPerLevel = 15f, BuffMpRegen = 0.5f, BuffMpRegenPerLevel = 0.5f,
+                Glyph = Glyph.Well },
+
             new SkillSpec { Name = "FrostNova", Title = "Frost Nova", Class = Mage, LearnLevel = 3,
                 Description = "Cold off the floor in every direction, and everything in it frozen where it stands.",
                 Shape = Shape.Area, Weapon = "Staff",
-                Mp = 16, MpPerLevel = 4, Cooldown = 15f, CooldownPerLevel = 0.6f,
+                // 12% of the pool on top of the flat 16 (2026-10-06, see Arcane Bolt): a fifth of
+                // the bar at level three, on a 15s cooldown it can afford.
+                Mp = 16, MpRate = 0.12f, MpPerLevel = 4, Cooldown = 15f, CooldownPerLevel = 0.6f,
                 // One burst since 2026-09-23 (`Burst`). It used to leave its patch down for
                 // as long as the slow and bite every 0.75s of it: 10-14 four or five times,
                 // about 60 a cast, which out-hit Meteor. Now it hits once, harder - between
@@ -405,8 +658,10 @@ namespace MultiplayerARPG.Demo.EditorTools
                 BuffSeconds = 3f, Freeze = true,
                 Clip = "Spell_Simple_Shoot", Trigger = 0.4f, Audio = DemoAudioWiring.SkillImpact,
                 Glyph = Glyph.Nova,
-                ActivateEffect = "FX_FrostNova", AreaColour = DemoSkillEffectBuilder.Frost,
-                HitEffect = "FX_HitFrost" },
+                // The caster draws the cold in (FX_FrostNova); the nova goes off where the area lands,
+                // as ice breaking out of frosted ground (2026-09-25) - it was a white disc and a flash.
+                ActivateEffect = "FX_FrostNova", LandEffect = DemoSkillEffectBuilder.FrostNovaBurstName,
+                AreaColour = DemoSkillEffectBuilder.Frost, HitEffect = "FX_HitFrost" },
 
             new SkillSpec { Name = "Mend", Title = "Mend", Class = Mage, LearnLevel = 5,
                 Description = "Closes a wound - your own, or the one standing in front of you.",
@@ -423,13 +678,37 @@ namespace MultiplayerARPG.Demo.EditorTools
                 Audio = DemoAudioWiring.SpellCast, Glyph = Glyph.Cross,
                 CastEffect = "FX_MendCast", ActivateEffect = "FX_MendBloom" },
 
+            new SkillSpec { Name = "ArcaneWard", Title = "Arcane Ward", Class = Mage, LearnLevel = 6,
+                Description = "A skin of force that turns blows aside. While it holds, your mana stops coming back " +
+                              "and the ward feeds on it. It fails when you run dry.",
+                Shape = Shape.Support, BuffTo = BuffTo.Toggle,
+                Mp = 10, Cooldown = 3f,
+                // More armour than the warrior's stance, because the mage has none of his own and
+                // pays for it by the second - the choice is the ward or the spells.
+                //
+                // The drain has to beat the mage's regeneration, which is mostly Intelligence and is
+                // large: measured live at level eight, 16 a second (11 from the stat, the rest the
+                // rule's 1% of the pool). The first cut drained 3 and the ward was free. So it shuts
+                // the stat's share off and burns 10: about 5 a second net at level eight, a minute
+                // and a half of a full pool standing still, well under one while casting.
+                BuffArmor = 30f, BuffArmorPerLevel = 6f, DrainMp = 10, StopsMpRegen = true,
+                // UAL1's two-handed spell stance coming up, which is the hands raising the ward.
+                Clip = "Spell_Double_Enter", Trigger = 0.8f, Audio = DemoAudioWiring.SpellCast,
+                Glyph = Glyph.Ward },
+
             new SkillSpec { Name = "Meteor", Title = "Meteor", Class = Mage, LearnLevel = 8,
                 Description = "Slow to call down, and worth the wait if it lands on the right patch of ground.",
                 Shape = Shape.Area, Weapon = "Staff",
-                Mp = 32, MpPerLevel = 6, Cooldown = 25f, CooldownPerLevel = 1f, Cast = 1.4f,
+                // 15% of the pool on top of the flat 32 (2026-10-06, see Arcane Bolt): the big
+                // spell takes about a fifth of the bar.
+                Mp = 32, MpRate = 0.15f, MpPerLevel = 6, Cooldown = 25f, CooldownPerLevel = 1f, Cast = 1.4f,
                 Min = 32f, Max = 42f, PerLevel = 10f,
                 Distance = 18f, Radius = 5f,
-                BuffSeconds = 1.2f,
+                // The meteor (2026-09-24): released at the end of the cast, it comes down out of
+                // the sky over this long and the damage lands with it. Until then the skill had no
+                // meteor at all - a disc, a spray of sparks, and a hit a second later. The 1.2s is
+                // the delay the damage always had, now with something to watch through it.
+                FallSeconds = 1.2f,
                 // UAL1's two-handed spell pair: the staff held out in both hands through the
                 // cast, then pushed forward on the launch - the same pair the Hierophant summons with,
                 // which is at least a family resemblance. The one-handed `Spell_Simple` set
@@ -444,8 +723,11 @@ namespace MultiplayerARPG.Demo.EditorTools
                 // the whole skill ends 1.4s sooner, entirely because the Mixamo launch was a
                 // 1.7s two-handed throw. A longer launch is the thing to look for if this
                 // reads too slight for the island's biggest spell.
+                //
+                // The hands get the ordinary cast sound; Meteor.wav - a whoosh that booms - goes
+                // with the falling rock, timed so the boom is the landing (FallSeconds).
                 Clip = "Spell_Double_Shoot_Loop", Trigger = 0.5f, CastClip = "Spell_Double_Idle_Loop",
-                Audio = DemoAudioWiring.SkillImpact, Glyph = Glyph.Meteor,
+                Audio = DemoAudioWiring.SpellCast, Glyph = Glyph.Meteor,
                 CastEffect = "FX_MeteorCast", ActivateEffect = "FX_MeteorLaunch",
                 AreaColour = DemoSkillEffectBuilder.Ember, HitEffect = "FX_HitEmber" },
 
@@ -502,6 +784,39 @@ namespace MultiplayerARPG.Demo.EditorTools
                 Clip = "Spell_Simple_Shoot", Trigger = 0.5f, CastClip = "Spell_Simple_Idle_Loop",
                 Audio = DemoAudioWiring.SpellCast, Glyph = Glyph.Vessel,
                 CastEffect = "FX_UnholyCast", ActivateEffect = "FX_UnholyMend" },
+
+            // ---- the cultists ---------------------------------------------------
+            //
+            // Their basic attack is already a spell (a violet bolt every couple of seconds - see the
+            // Cultist MonsterSpec in DemoDatabaseWiring); this is the one they stop for. Both hands
+            // up, the Hierophant's violet gathering on the body for a second and a half, and a
+            // fatter bolt that leaves its mark burning on whoever it hit. The point of it is the
+            // cast: it can be seen coming and a hit can break it (35% a hit, the same rule as every
+            // cast - InterruptChanceUseSkillComponent), so it is the cultist's tell and the
+            // player's opening. Interrupted, it still costs its cooldown: the kit starts that when
+            // the cast begins.
+            //
+            // A monster's debuff always lands at skill level 1 - the kit applies its skills at
+            // level one (`BaseSkill.ApplySkill`), though the hit itself is computed at the
+            // monster's level - so the curse is 4 a second for 5 seconds at every level, and the
+            // growth is all in the hit.
+            new SkillSpec { Name = "WitheringHex", Title = "Withering Hex", Monster = "Cultist",
+                Description = "A curse thrown from both hands. It goes on hurting after it lands.",
+                Shape = Shape.Missile, Weapon = "Staff", Missile = "HexBolt", MaxLevel = 10,
+                // Reached for on three decisions in ten once it is off cooldown - so about every
+                // fifteen to twenty seconds a fight, the bolts between.
+                UseRate = 0.3f,
+                Mp = 0, Cooldown = 12f, Cast = 1.5f,
+                Min = 6f, Max = 9f, PerLevel = 1.5f,
+                Distance = 16f,
+                BuffSeconds = 5f, DamagePerSecond = 4f,
+                // The two-handed pair Meteor and Call the Faithful use: held through the cast and
+                // pushed out on the launch, so it reads as a different thing from the one-handed
+                // flick of the ordinary bolt.
+                Clip = "Spell_Double_Shoot_Loop", Trigger = 0.5f, CastClip = "Spell_Double_Idle_Loop",
+                Audio = DemoAudioWiring.SpellCast, Glyph = Glyph.Sigil,
+                CastEffect = "FX_UnholyCast", ActivateEffect = "FX_UnholyRelease",
+                HitEffect = "FX_HitUnholy", DebuffEffect = "FX_Withering" },
         };
 
         [MenuItem("Open MMORPG/Demo/Build Skills")]
@@ -512,8 +827,11 @@ namespace MultiplayerARPG.Demo.EditorTools
             DemoItemBuilder.EnsureFolder(AreaDir);
 
             Texture2D areaSprite = BuildAreaSprite();
+            Texture2D aimSprite = BuildAimSprite();
             foreach (SkillSpec spec in Specs)
-                Build(spec, areaSprite);
+                Build(spec, areaSprite, aimSprite);
+            BuildAutoAttack();
+            WriteReleaseTable();
 
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();
@@ -527,7 +845,7 @@ namespace MultiplayerARPG.Demo.EditorTools
 
         // ---- the assets -------------------------------------------------------
 
-        private static void Build(SkillSpec spec, Texture2D areaSprite)
+        private static void Build(SkillSpec spec, Texture2D areaSprite, Texture2D aimSprite)
         {
             string path = $"{SkillDir}/{spec.Name}.asset";
             BaseSkill skill;
@@ -541,6 +859,11 @@ namespace MultiplayerARPG.Demo.EditorTools
                     break;
                 default:
                     skill = Create<Skill>(path);
+                    // A skill that is a multiple of the weapon runs on the demo's class, which
+                    // multiplies the character's whole swing rather than the weapon's raw
+                    // item damage - see SwingScaledWeaponSkill. Swapped in place so the asset keeps
+                    // its id and everything that points at it.
+                    skill = EnsureSkillClass(path, skill, spec.Shape != Shape.Support && spec.WeaponRate > 0f);
                     break;
             }
 
@@ -550,7 +873,7 @@ namespace MultiplayerARPG.Demo.EditorTools
             switch (spec.Shape)
             {
                 case Shape.Area:
-                    WriteAreaSkill(serialized, spec, areaSprite);
+                    WriteAreaSkill(serialized, spec, areaSprite, aimSprite);
                     break;
                 case Shape.Dash:
                     WriteDashSkill(serialized, spec);
@@ -560,6 +883,73 @@ namespace MultiplayerARPG.Demo.EditorTools
                     break;
             }
 
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            EditorUtility.SetDirty(skill);
+        }
+
+        /// <summary>Where the release effects are listed; the bow prefab points at it (DemoWeaponBuilder).</summary>
+        public const string ReleaseTablePath = "Assets/OpenMMORPG/Demo/Prefabs/Effects/Skills/SkillReleaseEffects.asset";
+
+        /// <summary>The release table, made empty if it is not there yet - the weapon builder runs first.</summary>
+        public static SkillReleaseEffects ReleaseTable()
+        {
+            var table = AssetDatabase.LoadAssetAtPath<SkillReleaseEffects>(ReleaseTablePath);
+            if (table != null)
+                return table;
+            DemoItemBuilder.EnsureFolder(System.IO.Path.GetDirectoryName(ReleaseTablePath).Replace('\\', '/'));
+            table = ScriptableObject.CreateInstance<SkillReleaseEffects>();
+            AssetDatabase.CreateAsset(table, ReleaseTablePath);
+            return table;
+        }
+
+        /// <summary>
+        /// Lists each skill's <see cref="SkillSpec.ReleaseEffect"/> for BowEquipmentEntity to play on the
+        /// trigger. Rewritten in place, so the bow's reference to it survives.
+        /// </summary>
+        private static void WriteReleaseTable()
+        {
+            var entries = new List<SkillReleaseEffects.Entry>();
+            foreach (SkillSpec spec in Specs)
+            {
+                if (string.IsNullOrEmpty(spec.ReleaseEffect))
+                    continue;
+                BaseSkill skill = Asset(spec.Name);
+                GameEffect effect = DemoSkillEffectBuilder.Effect(spec.ReleaseEffect);
+                if (skill == null || effect == null)
+                    continue;
+                entries.Add(new SkillReleaseEffects.Entry { skill = skill, effects = new[] { effect } });
+            }
+            SkillReleaseEffects table = ReleaseTable();
+            table.entries = entries.ToArray();
+            EditorUtility.SetDirty(table);
+            AssetDatabase.SaveAssetIfDirty(table);
+        }
+
+        /// <summary>
+        /// The Attack button: WoW's auto-attack toggle, which every class gets at level one and
+        /// DemoAutoHotkeys pins to key 1. Kept out of <see cref="Specs"/> on purpose - that table
+        /// also feeds the animation set and the monsters, and this is never cast: the player
+        /// controller intercepts the hotkey (see DemoAutoAttackSkill).
+        /// </summary>
+        private static readonly SkillSpec AutoAttackSpec = new SkillSpec
+        {
+            Name = "AutoAttack", Title = "Attack", Class = Everyone, LearnLevel = 1, MaxLevel = 1,
+            Description = "Attack your target until it falls, or press again to stop. " +
+                          "With nothing targeted, attacks the nearest enemy. Attacking skills start it too.",
+            Shape = Shape.Support, Glyph = Glyph.CrossedSwords,
+        };
+
+        private static void BuildAutoAttack()
+        {
+            string path = $"{SkillDir}/{AutoAttackSpec.Name}.asset";
+            var skill = Create<DemoAutoAttackSkill>(path);
+            var serialized = new SerializedObject(skill);
+            WriteCommon(serialized, AutoAttackSpec);
+            serialized.FindProperty("skillAttackType").enumValueIndex = (int)Skill.SkillAttackType.None;
+            // Handed over by the class, never bought.
+            Set(serialized, "requirement.characterLevel.amountIncreaseEachLevel", 0);
+            Set(serialized, "requirement.skillPoint.baseAmount", 0f);
+            Set(serialized, "requirement.skillPoint.amountIncreaseEachLevel", 0f);
             serialized.ApplyModifiedPropertiesWithoutUndo();
             EditorUtility.SetDirty(skill);
         }
@@ -578,15 +968,17 @@ namespace MultiplayerARPG.Demo.EditorTools
             // Active or passive is a field on the ordinary skill and a hard-coded property
             // on the area and dash ones, which are active by construction - so this is a
             // field that is simply not there on two of the three classes, rather than one
-            // that has been renamed. Asked for by name it comes back null, and everything
-            // in the demo is active anyway.
+            // that has been renamed. Asked for by name it comes back null there - and the
+            // passives are all plain `Skill`s, so they always find it.
             SerializedProperty skillType = serialized.FindProperty("skillType");
             if (skillType != null)
-                skillType.enumValueIndex = (int)SkillType.Active;
+                skillType.enumValueIndex = (int)(spec.Passive ? SkillType.Passive : SkillType.Active);
             serialized.FindProperty("maxLevel").intValue = spec.MaxLevel > 0 ? spec.MaxLevel : MaxSkillLevel;
 
             Set(serialized, "consumeMp.baseAmount", spec.Mp);
             Set(serialized, "consumeMp.amountIncreaseEachLevel", spec.MpPerLevel);
+            Set(serialized, "consumeMpRate.baseAmount", spec.MpRate);
+            Set(serialized, "consumeMpRate.amountIncreaseEachLevel", 0f);
             Set(serialized, "coolDownDuration.baseAmount", spec.Cooldown);
             Set(serialized, "coolDownDuration.amountIncreaseEachLevel", -spec.CooldownPerLevel);
             Set(serialized, "castDuration.baseAmount", spec.Cast);
@@ -622,10 +1014,17 @@ namespace MultiplayerARPG.Demo.EditorTools
             // Not on BaseSkill: `Skill` and `SimpleAreaAttackSkill` each declare their own
             // `damageHitEffects`, and `SimpleDashAttackSkill` declares none at all - which
             // is why Charge names no hit effect and takes the game instance's fallback.
-            if (!string.IsNullOrEmpty(spec.HitEffect))
+            // Written empty too, so taking the effect off a spec takes it off the asset - but only
+            // where the field exists, since WriteEffect warns about a missing one.
+            if (serialized.FindProperty("damageHitEffects") != null)
                 WriteEffect(serialized, "damageHitEffects", spec.HitEffect);
 
             serialized.FindProperty("requireShield").boolValue = spec.RequireShield;
+            // Written every time, so a spec that stops wanting arrows stops taking them.
+            serialized.FindProperty("requireAmmoType").enumValueIndex = spec.Arrows > 0
+                ? (int)RequireAmmoType.BasedOnWeapon
+                : (int)RequireAmmoType.None;
+            serialized.FindProperty("requireAmmoAmount").intValue = spec.Arrows;
             SerializedProperty weapons = serialized.FindProperty("availableWeapons");
             weapons.ClearArray();
             if (!string.IsNullOrEmpty(spec.Weapon))
@@ -666,12 +1065,12 @@ namespace MultiplayerARPG.Demo.EditorTools
                 WriteDamageInfo(serialized, spec);
                 WriteDebuff(serialized, spec);
 
-                if (spec.Knockback > 0f)
-                {
-                    Set(serialized, "knockbackEffect.force", spec.Knockback);
-                    Set(serialized, "knockbackEffect.deceleration", spec.Knockback * 2f);
-                    Set(serialized, "knockbackEffect.duration", 0.5f);
-                }
+                // Written every time, zero or not, so taking the knockback off a spec takes it off.
+                Set(serialized, "knockbackEffect.force", spec.Knockback);
+                Set(serialized, "knockbackEffect.deceleration", spec.Knockback * 2f);
+                // With no force the kit never applies it (`Skill`: `knockbackEffect.force > 0`),
+                // so the duration goes back to the kit's own default rather than to zero.
+                Set(serialized, "knockbackEffect.duration", spec.Knockback > 0f ? 0.5f : 1f);
             }
 
             WriteBuff(serialized, spec);
@@ -704,7 +1103,7 @@ namespace MultiplayerARPG.Demo.EditorTools
         }
 
         /// <summary>A <see cref="SimpleAreaAttackSkill"/>: dropped on the ground and left there.</summary>
-        private static void WriteAreaSkill(SerializedObject serialized, SkillSpec spec, Texture2D areaSprite)
+        private static void WriteAreaSkill(SerializedObject serialized, SkillSpec spec, Texture2D areaSprite, Texture2D aimSprite)
         {
             serialized.FindProperty("skillAttackType").enumValueIndex =
                 (int)SimpleAreaAttackSkill.SkillAttackType.Normal;
@@ -720,7 +1119,19 @@ namespace MultiplayerARPG.Demo.EditorTools
             // `areaDuration`, so a patch that lives 0.5s and bites every 0.3s bites at 0.3s
             // and is gone before a second could come. The debuff it leaves is separate and
             // keeps its full `BuffSeconds`.
-            if (spec.Burst)
+            //
+            // A strike (the meteor) bites once, when it lands: `applyDuration` is the fall. The
+            // patch then stays only a little longer - long enough for what the fireball shed on
+            // the way down to burn out, and less than a second fall, so it can never bite twice.
+            // It must not be the fall exactly either: until 2026-09-24 Meteor's patch lived 1.2s
+            // and bit at 1.2s, so the kit's timer putting it away (`PushBack(areaDuration)`) and
+            // its timer biting (`ManagedUpdate`) fell due together - a race nothing settles.
+            if (spec.FallSeconds > 0f)
+            {
+                Set(serialized, "areaDuration.baseAmount", spec.FallSeconds + Mathf.Min(StrikeLinger, spec.FallSeconds * 0.8f));
+                Set(serialized, "applyDuration.baseAmount", spec.FallSeconds);
+            }
+            else if (spec.Burst)
             {
                 Set(serialized, "areaDuration.baseAmount", BurstSeconds);
                 Set(serialized, "applyDuration.baseAmount", BurstBite);
@@ -732,6 +1143,9 @@ namespace MultiplayerARPG.Demo.EditorTools
             }
 
             serialized.FindProperty("areaDamageEntity").objectReferenceValue = BuildArea(spec, areaSprite);
+            // The circle under the cursor while it is aimed. Written null where there is nothing
+            // to aim, so a skill that stops being aimed loses its circle too.
+            serialized.FindProperty("targetObjectPrefab").objectReferenceValue = BuildAimMarker(spec, aimSprite);
             WriteDebuff(serialized, spec);
         }
 
@@ -741,12 +1155,23 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// <summary>When a burst bites: shortly after it appears, as the ring goes out.</summary>
         private const float BurstBite = 0.3f;
 
+        /// <summary>How long a strike's patch outlasts its landing. See <see cref="SkillSpec.FallSeconds"/>.</summary>
+        private const float StrikeLinger = 1f;
+
         /// <summary>A <see cref="SimpleDashAttackSkill"/>: the warrior's charge.</summary>
         private static void WriteDashSkill(SerializedObject serialized, SkillSpec spec)
         {
             Set(serialized, "castDistance.baseAmount", spec.Distance);
             serialized.FindProperty("dashToEnemyPosition").boolValue = true;
             serialized.FindProperty("dashToEnemyStoppingDistance").floatValue = 1.6f;
+            // ReplaceMovement, not the kit's default Dash. Both carry the character the same
+            // way; the only difference is that Dash raises `MovementState.IsDash` for as long
+            // as the force runs, and the model answers that flag with its dash clip - which
+            // in this demo is the dodge `Roll`. The sprint clip hides it for its 0.67s, and
+            // then a twelve-metre charge finished with the warrior tumbling head over heels
+            // into the enemy (seen frame by frame in the client/server test, 2026-09-30).
+            // Without the flag the remainder of the run plays as what it is: running.
+            serialized.FindProperty("forceMode").enumValueIndex = (int)ApplyMovementForceMode.ReplaceMovement;
             // Fast enough to read as a charge rather than a walk, decelerating hard enough
             // that it stops where the target is rather than sliding past him.
             Set(serialized, "forceApplierData.speed", 18f);
@@ -766,7 +1191,22 @@ namespace MultiplayerARPG.Demo.EditorTools
             SerializedProperty damages = serialized.FindProperty("postDashDamageAmounts");
             damages.arraySize = 1;
             WriteDamageAmount(serialized, "postDashDamageAmounts.Array.data[0]", spec);
-            serialized.FindProperty("postDashEnemyLookupRadius").floatValue = 2.5f;
+            // Wider than the 2.5 m it was, for a reason that only shows with a real client:
+            // the dash is applied and ended on the server, but the player's position is
+            // the client's (NotSecure movement), and the server's copy of it trails the
+            // client by a sync tick - over a metre at charge speed. Measured 2026-09-30: the
+            // client stopped 2.2 m from a deer and the server, looking up from its older
+            // position, found nothing within 2.5. Four metres covers that lag and is still
+            // "on arrival" against a 1.6 m stopping distance.
+            serialized.FindProperty("postDashEnemyLookupRadius").floatValue = 4f;
+            // The shove on arrival, applied by the kit alongside the damage above
+            // (`SimpleDashAttackSkill.OnPostDashAttack`, only when force > 0). Same shape as
+            // the melee writer's: written every time so a spec without one clears it, and a
+            // zero force keeps the kit's default duration rather than zero. On a player it
+            // is a force on a client-driven entity, which RemoteForceUpkeep now ends.
+            Set(serialized, "postDashKnockbackEffect.force", spec.Knockback);
+            Set(serialized, "postDashKnockbackEffect.deceleration", spec.Knockback * 2f);
+            Set(serialized, "postDashKnockbackEffect.duration", spec.Knockback > 0f ? 0.5f : 1f);
         }
 
         // ---- the pieces they share --------------------------------------------
@@ -826,6 +1266,11 @@ namespace MultiplayerARPG.Demo.EditorTools
             if (!lingers)
                 return;
 
+            // What the victim wears while it lasts. Written every time, empty or not, so taking
+            // one off a spec takes it off the asset. None of the demo's debuffs showed on their
+            // target until 2026-09-25: a crippled bandit simply walked slower, for no visible reason.
+            WriteEffect(serialized, "debuff.effects", spec.DebuffEffect);
+
             Set(serialized, "debuff.duration.baseAmount", spec.BuffSeconds);
             Set(serialized, "debuff.duration.amountIncreaseEachLevel", spec.BuffSeconds * 0.1f);
             serialized.FindProperty("debuff.ailment").enumValueIndex = (int)(spec.Freeze ? AilmentPresets.Freeze
@@ -836,28 +1281,40 @@ namespace MultiplayerARPG.Demo.EditorTools
             // Rates, not amounts: a flat number off a move speed would stop a slow bandit
             // dead and barely trouble a deer, and the demo has both. (The slow is written
             // above, with the ailment.)
-            if (spec.EvasionRate > 0f)
-                Set(serialized, "debuff.increaseStatsRate.baseStats.evasion", -spec.EvasionRate);
+            // Both written every time too: an evasion of zero, and an empty damage-over-time list.
+            Set(serialized, "debuff.increaseStatsRate.baseStats.evasion", -spec.EvasionRate);
+            SerializedProperty overTime = serialized.FindProperty("debuff.damageOverTimes");
+            overTime.arraySize = spec.DamagePerSecond > 0f ? 1 : 0;
             if (spec.DamagePerSecond > 0f)
             {
-                SerializedProperty overTime = serialized.FindProperty("debuff.damageOverTimes");
-                overTime.arraySize = 1;
-                Set(serialized, "debuff.damageOverTimes.Array.data[0].amount.baseAmount.min", spec.DamagePerSecond);
-                Set(serialized, "debuff.damageOverTimes.Array.data[0].amount.baseAmount.max", spec.DamagePerSecond);
-                Set(serialized, "debuff.damageOverTimes.Array.data[0].amount.amountIncreaseEachLevel.min", 1f);
-                Set(serialized, "debuff.damageOverTimes.Array.data[0].amount.amountIncreaseEachLevel.max", 1f);
+                // The whole of it, not a rate - see SkillSpec.DamagePerSecond.
+                float total = spec.DamagePerSecond * spec.BuffSeconds;
+                float totalStep = spec.DamagePerSecondPerLevel * spec.BuffSeconds;
+                Set(serialized, "debuff.damageOverTimes.Array.data[0].amount.baseAmount.min", total);
+                Set(serialized, "debuff.damageOverTimes.Array.data[0].amount.baseAmount.max", total);
+                Set(serialized, "debuff.damageOverTimes.Array.data[0].amount.amountIncreaseEachLevel.min", totalStep);
+                Set(serialized, "debuff.damageOverTimes.Array.data[0].amount.amountIncreaseEachLevel.max", totalStep);
             }
         }
 
-        /// <summary>What a support skill puts on its friends.</summary>
+        /// <summary>What a support skill puts on its friends, and what a passive adds to its owner.</summary>
         private static void WriteBuff(SerializedObject serialized, SkillSpec spec)
         {
             SerializedProperty type = serialized.FindProperty("skillBuffType");
+            // A passive's stats are its `buff`, which the kit reads for any Passive skill whatever
+            // its buff type (`Skill.TryGetBuff`); the type stays None so pressing it does nothing.
+            if (spec.BuffTo == BuffTo.None)
+            {
+                type.enumValueIndex = (int)Skill.SkillBuffType.None;
+                if (spec.Passive)
+                    WriteBuffStats(serialized, spec);
+                return;
+            }
             switch (spec.BuffTo)
             {
-                case BuffTo.None:
-                    type.enumValueIndex = (int)Skill.SkillBuffType.None;
-                    return;
+                case BuffTo.Toggle:
+                    type.enumValueIndex = (int)Skill.SkillBuffType.Toggle;
+                    break;
                 case BuffTo.Self:
                     type.enumValueIndex = (int)Skill.SkillBuffType.BuffToUser;
                     break;
@@ -876,21 +1333,70 @@ namespace MultiplayerARPG.Demo.EditorTools
             serialized.FindProperty("buffToUserIfNoTarget").boolValue = true;
 
             Set(serialized, "buff.duration.baseAmount", spec.BuffSeconds);
-            if (spec.HealHp > 0)
-            {
-                Set(serialized, "buff.recoveryHp.baseAmount", spec.HealHp);
-                Set(serialized, "buff.recoveryHp.amountIncreaseEachLevel", spec.HealHpPerLevel);
-            }
-            if (spec.BuffMoveRate > 0f)
-                Set(serialized, "buff.increaseStatsRate.baseStats.moveSpeed", spec.BuffMoveRate);
+            // Written every time, zero or not, like WriteBuffStats below: taking the heal or the
+            // damage off a spec takes it off the asset.
+            Set(serialized, "buff.recoveryHp.baseAmount", spec.HealHp);
+            Set(serialized, "buff.recoveryHp.amountIncreaseEachLevel", spec.HealHpPerLevel);
+            SerializedProperty damages = serialized.FindProperty("buff.increaseDamages");
+            damages.arraySize = spec.BuffDamage > 0 ? 1 : 0;
             if (spec.BuffDamage > 0)
             {
-                SerializedProperty damages = serialized.FindProperty("buff.increaseDamages");
-                damages.arraySize = 1;
                 Set(serialized, "buff.increaseDamages.Array.data[0].amount.baseAmount.min", spec.BuffDamage);
                 Set(serialized, "buff.increaseDamages.Array.data[0].amount.baseAmount.max", spec.BuffDamage);
                 Set(serialized, "buff.increaseDamages.Array.data[0].amount.amountIncreaseEachLevel.min", spec.BuffDamagePerLevel);
                 Set(serialized, "buff.increaseDamages.Array.data[0].amount.amountIncreaseEachLevel.max", spec.BuffDamagePerLevel);
+            }
+
+            // A toggle has no clock: `noDuration` keeps it until it is pressed again, and makes the
+            // kit treat its duration as one second - so a recovery on it is a rate per second for as
+            // long as it is on (`CharacterSkillAndBuffComponent`), which is what the ward's drain is.
+            bool toggle = spec.BuffTo == BuffTo.Toggle;
+            serialized.FindProperty("buff.noDuration").boolValue = toggle;
+            Set(serialized, "buff.recoveryMp.baseAmount", -spec.DrainMp);
+            Set(serialized, "buff.removeBuffWhenAttackChance.baseAmount", spec.BreaksOnAttack ? 1f : 0f);
+            Set(serialized, "buff.removeBuffWhenAttackedChance.baseAmount", spec.BreaksWhenHit ? 1f : 0f);
+            WriteBuffStats(serialized, spec);
+        }
+
+        /// <summary>
+        /// The stats a buff or a passive adds. Written every time, zero or not, so taking one off
+        /// a spec takes it off the asset.
+        /// </summary>
+        private static void WriteBuffStats(SerializedObject serialized, SkillSpec spec)
+        {
+            const string flat = "buff.increaseStats.baseStats.";
+            const string flatStep = "buff.increaseStats.statsIncreaseEachLevel.";
+            const string rate = "buff.increaseStatsRate.baseStats.";
+            const string rateStep = "buff.increaseStatsRate.statsIncreaseEachLevel.";
+
+            Set(serialized, flat + "hp", spec.BuffHp);
+            Set(serialized, flatStep + "hp", spec.BuffHpPerLevel);
+            Set(serialized, flat + "mp", spec.BuffMp);
+            Set(serialized, flatStep + "mp", spec.BuffMpPerLevel);
+            Set(serialized, flat + "mpRecovery", spec.BuffMpRegen);
+            Set(serialized, flatStep + "mpRecovery", spec.BuffMpRegenPerLevel);
+            Set(serialized, flat + "blockRate", spec.BuffBlock);
+            Set(serialized, flatStep + "blockRate", spec.BuffBlockPerLevel);
+            Set(serialized, flat + "blockDmgRate", spec.BuffBlockDamage);
+            Set(serialized, flat + "criRate", spec.BuffCrit);
+            Set(serialized, flatStep + "criRate", spec.BuffCritPerLevel);
+            Set(serialized, flat + "criDmgRate", spec.BuffCritDamage);
+            Set(serialized, flatStep + "criDmgRate", spec.BuffCritDamagePerLevel);
+            // A rate, not an amount, like the slows: a flat speed would mean something different
+            // on every body.
+            Set(serialized, rate + "moveSpeed", spec.BuffMoveRate);
+            Set(serialized, rateStep + "moveSpeed", spec.BuffMoveRatePerLevel);
+            Set(serialized, rate + "mpRecovery", spec.StopsMpRegen ? -1f : 0f);
+
+            // Armour is per damage element. The element is left null, which the kit reads as the
+            // game instance's default - Physical, which is what every blow on the island is.
+            SerializedProperty armors = serialized.FindProperty("buff.increaseArmors");
+            armors.arraySize = spec.BuffArmor != 0f || spec.BuffArmorPerLevel != 0f ? 1 : 0;
+            if (armors.arraySize > 0)
+            {
+                serialized.FindProperty("buff.increaseArmors.Array.data[0].damageElement").objectReferenceValue = null;
+                Set(serialized, "buff.increaseArmors.Array.data[0].amount.baseAmount", spec.BuffArmor);
+                Set(serialized, "buff.increaseArmors.Array.data[0].amount.amountIncreaseEachLevel", spec.BuffArmorPerLevel);
             }
         }
 
@@ -930,6 +1436,17 @@ namespace MultiplayerARPG.Demo.EditorTools
 
         // ---- what the rest of the build asks for ------------------------------
 
+        /// <summary>The radius a skill's area is built with, for an effect that has to match it. Zero if none.</summary>
+        public static float AreaRadius(string name)
+        {
+            foreach (SkillSpec spec in Specs)
+            {
+                if (spec.Name == name)
+                    return spec.Radius;
+            }
+            return 0f;
+        }
+
         /// <summary>Every skill asset, for registering in the game database.</summary>
         public static List<Object> AllSkills()
         {
@@ -954,11 +1471,12 @@ namespace MultiplayerARPG.Demo.EditorTools
         }
 
         /// <summary>
-        /// Writes one class's four skills onto its <see cref="PlayerCharacter"/>.
+        /// Writes one class's skills onto its <see cref="PlayerCharacter"/>, in the table's
+        /// order, which is the order they are learned in and so the skills window's.
         ///
         /// The same list does two jobs in the kit: it is what the class may learn, and
         /// the level it starts at. The first is written at level one, so a new character
-        /// has it from the create screen; the other three are written at zero, which
+        /// has it from the create screen; the others are written at zero, which
         /// leaves them in the skill window with their requirement showing, waiting for a
         /// point.
         /// </summary>
@@ -971,10 +1489,16 @@ namespace MultiplayerARPG.Demo.EditorTools
                 return;
             }
             list.ClearArray();
+            // The Attack button first, at level one for every class, so it is also the first
+            // entry in the skills window.
+            var granted = new List<SkillSpec> { AutoAttackSpec };
             foreach (SkillSpec spec in Specs)
             {
-                if (spec.Class != className)
-                    continue;
+                if (spec.Class == className)
+                    granted.Add(spec);
+            }
+            foreach (SkillSpec spec in granted)
+            {
                 BaseSkill skill = Asset(spec.Name);
                 if (skill == null)
                     continue;
@@ -1079,7 +1603,7 @@ namespace MultiplayerARPG.Demo.EditorTools
 
         /// <summary>
         /// The disc a ground-targeted skill leaves behind: a trigger the size of the
-        /// area, and a flat quad to show where it is.
+        /// area, and a circle draped over the ground to show where it is.
         ///
         /// One prefab per skill rather than one shared: the trigger's radius is the
         /// area's radius and lives in the prefab, so a shared entity would give the
@@ -1098,23 +1622,53 @@ namespace MultiplayerARPG.Demo.EditorTools
                 // the sphere catches a body rather than a pair of ankles.
                 trigger.center = new Vector3(0f, 1f, 0f);
 
-                GameObject disc = GameObject.CreatePrimitive(PrimitiveType.Quad);
-                Object.DestroyImmediate(disc.GetComponent<Collider>());
-                disc.name = "Marker";
-                disc.layer = DamageEntityLayer;
-                disc.transform.SetParent(root.transform, false);
-                // Laid flat, and a finger above the ground: a quad written into the
-                // terrain's own plane z-fights with it from every angle.
-                disc.transform.localEulerAngles = new Vector3(90f, 0f, 0f);
-                disc.transform.localPosition = new Vector3(0f, 0.06f, 0f);
-                disc.transform.localScale = Vector3.one * spec.Radius * 2f;
-                disc.GetComponent<MeshRenderer>().sharedMaterial = AreaMaterial(spec, sprite);
+                // A skill with a landing of its own draws its own ground (Frost Nova's frost), so
+                // it has no disc and no spray: the effect is set off where it lands, and that is all.
+                bool ownLanding = !string.IsNullOrEmpty(spec.LandEffect);
+                MeshRenderer discRenderer = null;
+                if (!ownLanding || spec.KeepMarker)
+                {
+                    // The disc, draped over the ground by GroundCircle rather than laid level:
+                    // until 2026-09-24 it was a flat quad, and on a hillside the rising ground cut
+                    // a straight edge across it. It floats a hand's breadth up, as the quad did,
+                    // because a surface written into the terrain's own plane z-fights with it.
+                    var disc = new GameObject("Marker");
+                    disc.layer = DamageEntityLayer;
+                    disc.transform.SetParent(root.transform, false);
+                    disc.AddComponent<MeshFilter>();
+                    discRenderer = disc.AddComponent<MeshRenderer>();
+                    discRenderer.sharedMaterial = AreaMaterial(spec, sprite);
+                    discRenderer.shadowCastingMode = ShadowCastingMode.Off;
+                    discRenderer.receiveShadows = false;
+                    var circle = disc.AddComponent<GroundCircle>();
+                    circle.radius = spec.Radius;
+                    // The sprite's bright rim, not its outer edge, falls on the radius - the rim is
+                    // what reads as the boundary. Until 2026-09-24 the disc was the radius across,
+                    // which drew the rim at 86% of it: a Frost Nova's ring landed at 3.9m while the
+                    // nova's own particle ring, and the trigger, reached 4.5m - and it would have
+                    // landed visibly inside the aiming circle, which is drawn true.
+                    circle.rimAt = AreaRimAt;
+                }
 
                 // An area entity has no effect sockets - it is not a character - so its
                 // particles are parented straight on and play on awake. The entity lives
                 // exactly as long as the patch does, so they do too, for free.
+                bool strike = spec.FallSeconds > 0f;
+                // Nor motes, under a landing of its own: Volley's dwell was pale blue specks drifting
+                // over the patch, which read as frost, and its arrows now say "still dangerous".
                 DemoSkillEffectBuilder.AddAreaParticles(root, spec.AreaColour, spec.Radius,
-                                                        lingers: !spec.Burst && spec.BuffSeconds > 2f);
+                                                        lingers: !ownLanding && !spec.Burst && spec.BuffSeconds > 2f,
+                                                        landing: !strike && !ownLanding);
+                // The meteor, for a strike: it falls onto the disc, which is its warning, and puts
+                // the disc out when it lands. It takes the skill's own sound, which the caster's
+                // animation therefore does not (DemoAnimationSet).
+                if (strike)
+                    DemoSkillEffectBuilder.AddMeteorStrike(root, spec.FallSeconds,
+                                                           DemoAudioWiring.SkillClips(spec.Name, null), discRenderer);
+                // Fetched from the pool rather than parented here: a burst area is put away after
+                // half a second, and everything under it goes with it (AreaLandEffect).
+                if (ownLanding)
+                    root.AddComponent<AreaLandEffect>().effect = DemoSkillEffectBuilder.Effect(spec.LandEffect);
 
                 var entity = root.AddComponent<AreaDamageEntity>();
                 entity.canApplyDamageToUser = false;
@@ -1159,14 +1713,24 @@ namespace MultiplayerARPG.Demo.EditorTools
             AssetDatabase.SaveAssetIfDirty(prefab);
         }
 
+        private static Material AreaMaterial(SkillSpec spec, Texture2D sprite)
+        {
+            // A disc kept under a landing of its own is the edge of the danger, not the show: the
+            // arrows are. At the class colour it was a neon-green plate under Volley (live,
+            // 2026-09-25), so it takes the skill's own colour, dimmed.
+            if (spec.KeepMarker)
+                return GlowMaterial($"{MaterialDir}/MI_SkillArea_{spec.Name}.mat", sprite, spec.AreaColour * 0.7f);
+            return GlowMaterial($"{MaterialDir}/MI_SkillArea_{spec.Name}.mat", sprite, ClassColour(spec.Class) * 1.6f);
+        }
+
         /// <summary>
-        /// The marker's material: additive, so the disc reads as light on the grass
+        /// The ground markers' material: additive, so a disc reads as light on the grass
         /// rather than as a sticker laid over it, and unlit so it does not go out with
         /// the sun. Written property by property for the same reason the flame's is -
         /// the shader reads _SrcBlend and _DstBlend, and only the material inspector ever
         /// sets those from the Blend dropdown.
         /// </summary>
-        private static Material AreaMaterial(SkillSpec spec, Texture2D sprite)
+        private static Material GlowMaterial(string path, Texture2D sprite, Color colour)
         {
             Shader shader = Shader.Find("Universal Render Pipeline/Unlit");
             if (shader == null)
@@ -1175,7 +1739,6 @@ namespace MultiplayerARPG.Demo.EditorTools
                 return null;
             }
 
-            string path = $"{MaterialDir}/MI_SkillArea_{spec.Name}.mat";
             var material = AssetDatabase.LoadAssetAtPath<Material>(path);
             if (material == null)
             {
@@ -1185,7 +1748,7 @@ namespace MultiplayerARPG.Demo.EditorTools
             }
             material.shader = shader;
             material.SetTexture("_BaseMap", sprite);
-            material.SetColor("_BaseColor", ClassColour(spec.Class) * 1.6f);
+            material.SetColor("_BaseColor", colour);
             material.SetFloat("_Surface", 1f);
             material.SetFloat("_Blend", 2f);
             material.SetFloat("_Cull", (float)CullMode.Off);
@@ -1221,13 +1784,122 @@ namespace MultiplayerARPG.Demo.EditorTools
                     // The rim as a bell around the edge of the circle, and a wash inside it
                     // that fades towards the middle, so the marker reads as a boundary
                     // rather than as a plate laid over the ground.
-                    float rim = Mathf.Exp(-Mathf.Pow((r - 0.86f) / 0.10f, 2f));
+                    float rim = Mathf.Exp(-Mathf.Pow((r - AreaRimAt) / 0.10f, 2f));
                     float fill = r < 0.92f ? 0.22f * (1f - r * 0.45f) : 0f;
                     float a = Mathf.Clamp01(Mathf.Max(rim, fill)) * Mathf.Clamp01((1f - r) * 8f);
                     pixels[y * size + x] = new Color32(255, 255, 255, (byte)Mathf.RoundToInt(a * 255f));
                 }
             }
             return WritePng(AreaTexturePath, size, pixels, sprite: false);
+        }
+
+        /// <summary>Where the landing disc's rim peaks, as a share of the sprite's radius.</summary>
+        private const float AreaRimAt = 0.86f;
+
+        // ---- the aiming circle ------------------------------------------------
+
+        /// <summary>
+        /// The circle under the cursor while a skill is aimed: the skill's own radius, draped
+        /// over the ground by <see cref="GroundCircle"/>, which the kit's area aim
+        /// controller places. Until 2026-09-24 no demo skill had one, and pressing Volley or
+        /// Meteor showed nothing at all until the click that cast it.
+        ///
+        /// Only for a player's skill that is aimed at all. A monster aims with its AI, not a
+        /// cursor, and a skill with no reach - Frost Nova - lands on its caster and is cast
+        /// the moment its key is pressed (DemoPlayerController), so there is nothing to show.
+        ///
+        /// In the class colour, like the disc the skill leaves when it lands, so the circle
+        /// and the landing read as one thing. One prefab per skill, because the radius is baked
+        /// into it, as the area entity's own trigger is.
+        /// </summary>
+        private static GameObject BuildAimMarker(SkillSpec spec, Texture2D sprite)
+        {
+            if (spec.Class == null || spec.Distance <= 0f)
+                return null;
+            var root = new GameObject($"{spec.Name}AimMarker");
+            try
+            {
+                root.layer = TransparentFxLayer;
+                root.AddComponent<MeshFilter>();
+                var renderer = root.AddComponent<MeshRenderer>();
+                renderer.sharedMaterial = GlowMaterial($"{MaterialDir}/MI_SkillAim_{spec.Name}.mat", sprite,
+                                                       ClassColour(spec.Class) * AimBrightness);
+                renderer.shadowCastingMode = ShadowCastingMode.Off;
+                renderer.receiveShadows = false;
+                renderer.lightProbeUsage = LightProbeUsage.Off;
+                renderer.reflectionProbeUsage = ReflectionProbeUsage.Off;
+                var circle = root.AddComponent<GroundCircle>();
+                circle.radius = spec.Radius;
+                circle.rimAt = AimRimAt;
+                // Pulsing, so an aim in progress reads as live rather than as something
+                // lying on the ground.
+                circle.pulseDepth = 0.3f;
+
+                string path = $"{AreaDir}/{root.name}.prefab";
+                PrefabUtility.SaveAsPrefabAsset(root, path);
+                return AssetDatabase.LoadAssetAtPath<GameObject>(path);
+            }
+            finally
+            {
+                Object.DestroyImmediate(root);
+            }
+        }
+
+        /// <summary>
+        /// Brighter than the landing disc's 1.6: the circle is a thin line where the disc is a
+        /// wash, and it has to hold up on sunlit grass, which additive light barely changes.
+        /// </summary>
+        private const float AimBrightness = 2.4f;
+
+        /// <summary>Where the aiming circle's rim peaks, as a share of the sprite's radius.</summary>
+        private const float AimRimAt = 0.9f;
+
+        /// <summary>
+        /// A crisp rim with a soft glow either side of it, a faint fill, and a dot at the aim
+        /// point. The rim is drawn at <see cref="AimRimAt"/>, which the circle is sized by, so it
+        /// lands on the skill's radius.
+        ///
+        /// Drawn only into a gap, like the icons: a hand-made circle at the same path is kept.
+        /// One that is should keep its ring at the same share of the way out.
+        /// </summary>
+        private static Texture2D BuildAimSprite()
+        {
+            if (System.IO.File.Exists(AimTexturePath))
+                return AssetDatabase.LoadAssetAtPath<Texture2D>(AimTexturePath);
+
+            const int size = 512;
+            const float rim = AimRimAt;
+            // Half the band's width, as a share of the radius: about 9cm on Meteor's circle.
+            const float halfBand = 0.016f;
+            float pixel = 2f / size;
+            var pixels = new Color32[size * size];
+            for (int y = 0; y < size; ++y)
+            {
+                for (int x = 0; x < size; ++x)
+                {
+                    float dx = (x + 0.5f) / size * 2f - 1f;
+                    float dy = (y + 0.5f) / size * 2f - 1f;
+                    float r = Mathf.Sqrt(dx * dx + dy * dy);
+                    float band = Mathf.Clamp01((halfBand - Mathf.Abs(r - rim)) / (1.5f * pixel) + 0.5f);
+                    float glow = r > rim
+                        ? 0.45f * Mathf.Exp(-(r - rim) / 0.025f)
+                        : 0.30f * Mathf.Exp(-(rim - r) / 0.07f);
+                    float fill = r < rim ? 0.08f : 0f;
+                    float dot = 0.7f * Mathf.Clamp01((0.022f - r) / (1.5f * pixel) + 0.5f);
+                    float a = Mathf.Max(Mathf.Max(band, glow), Mathf.Max(fill, dot)) *
+                              Mathf.Clamp01((1f - r) / (2f * pixel));
+                    pixels[y * size + x] = new Color32(255, 255, 255, (byte)Mathf.RoundToInt(a * 255f));
+                }
+            }
+            WritePng(AimTexturePath, size, pixels, sprite: false);
+            // Twice the landing disc's resolution, because the circle is a thin line magnified
+            // across half the screen; compressed, because at this size uncompressed is 1.3 MB
+            // of the demo's budget for one ring. It is white, so only alpha has to survive,
+            // and BC7 keeps these gradients smooth.
+            var importer = (TextureImporter)AssetImporter.GetAtPath(AimTexturePath);
+            importer.textureCompression = TextureImporterCompression.CompressedHQ;
+            importer.SaveAndReimport();
+            return AssetDatabase.LoadAssetAtPath<Texture2D>(AimTexturePath);
         }
 
         // ---- icons ------------------------------------------------------------
@@ -1253,6 +1925,14 @@ namespace MultiplayerARPG.Demo.EditorTools
             Sigil,
             Vessel,
             Coven,
+            CrossedSwords,
+            // The passives and toggles (2026-09-29).
+            Bastion,
+            Guard,
+            Eye,
+            Stride,
+            Well,
+            Ward,
         }
 
         /// <summary>
@@ -1337,6 +2017,7 @@ namespace MultiplayerARPG.Demo.EditorTools
             {
                 foreach (SkillSpec spec in Specs)
                     DrawIcon(spec, $"{IconDir}/{spec.Name}.png");
+                DrawIcon(AutoAttackSpec, $"{IconDir}/{AutoAttackSpec.Name}.png");
             }
             finally
             {
@@ -1409,6 +2090,8 @@ namespace MultiplayerARPG.Demo.EditorTools
                 case Warrior: return new Color(0.58f, 0.21f, 0.17f);
                 case Ranger: return new Color(0.20f, 0.44f, 0.25f);
                 case Mage: return new Color(0.19f, 0.32f, 0.58f);
+                // Bronze for what every class has, so it is nobody's colour.
+                case Everyone: return new Color(0.50f, 0.38f, 0.20f);
                 default: return new Color(0.33f, 0.22f, 0.44f);
             }
         }
@@ -1511,6 +2194,14 @@ namespace MultiplayerARPG.Demo.EditorTools
                     }
                     break;
 
+                // Two blades crossed, each with a guard - the Attack button.
+                case Glyph.CrossedSwords:
+                    bar(0.22f, 0.22f, 0.78f, 0.78f, 0.08f);
+                    bar(0.78f, 0.22f, 0.22f, 0.78f, 0.08f);
+                    bar(0.20f, 0.36f, 0.36f, 0.20f, 0.07f);
+                    bar(0.64f, 0.20f, 0.80f, 0.36f, 0.07f);
+                    break;
+
                 case Glyph.Cross:
                     bar(0.50f, 0.24f, 0.50f, 0.76f, 0.14f);
                     bar(0.24f, 0.50f, 0.76f, 0.50f, 0.14f);
@@ -1549,6 +2240,65 @@ namespace MultiplayerARPG.Demo.EditorTools
                         float a = Mathf.PI / 2f + i * 2f * Mathf.PI / 3f;
                         disc(0.50f + Mathf.Cos(a) * 0.30f, 0.50f + Mathf.Sin(a) * 0.30f, 0.10f);
                     }
+                    break;
+
+                // Toughness: a crenellated tower, for what stands and takes it.
+                case Glyph.Bastion:
+                    bar(0.30f, 0.20f, 0.30f, 0.66f, 0.10f);
+                    bar(0.70f, 0.20f, 0.70f, 0.66f, 0.10f);
+                    bar(0.26f, 0.20f, 0.74f, 0.20f, 0.10f);
+                    bar(0.26f, 0.66f, 0.74f, 0.66f, 0.10f);
+                    bar(0.30f, 0.66f, 0.30f, 0.80f, 0.10f);
+                    bar(0.50f, 0.66f, 0.50f, 0.80f, 0.10f);
+                    bar(0.70f, 0.66f, 0.70f, 0.80f, 0.10f);
+                    break;
+
+                // Defensive Stance: the shield's outline with a blade laid level across it.
+                case Glyph.Guard:
+                    bar(0.30f, 0.74f, 0.70f, 0.74f, 0.08f);
+                    bar(0.31f, 0.74f, 0.33f, 0.46f, 0.08f);
+                    bar(0.69f, 0.74f, 0.67f, 0.46f, 0.08f);
+                    bar(0.33f, 0.46f, 0.50f, 0.26f, 0.08f);
+                    bar(0.67f, 0.46f, 0.50f, 0.26f, 0.08f);
+                    bar(0.14f, 0.54f, 0.86f, 0.54f, 0.08f);
+                    bar(0.22f, 0.44f, 0.22f, 0.64f, 0.07f);
+                    break;
+
+                // Keen Eye: the lids as two shallow chevrons and the pupil between them.
+                case Glyph.Eye:
+                    bar(0.14f, 0.50f, 0.50f, 0.72f, 0.07f);
+                    bar(0.50f, 0.72f, 0.86f, 0.50f, 0.07f);
+                    bar(0.14f, 0.50f, 0.50f, 0.28f, 0.07f);
+                    bar(0.50f, 0.28f, 0.86f, 0.50f, 0.07f);
+                    disc(0.50f, 0.50f, 0.11f);
+                    break;
+
+                // Fleet of Foot: a forward chevron trailing speed lines.
+                case Glyph.Stride:
+                    bar(0.56f, 0.76f, 0.80f, 0.50f, 0.10f);
+                    bar(0.80f, 0.50f, 0.56f, 0.24f, 0.10f);
+                    bar(0.18f, 0.66f, 0.50f, 0.66f, 0.07f);
+                    bar(0.12f, 0.50f, 0.56f, 0.50f, 0.07f);
+                    bar(0.18f, 0.34f, 0.50f, 0.34f, 0.07f);
+                    break;
+
+                // Deep Reserves: a drop, its point up.
+                case Glyph.Well:
+                    disc(0.50f, 0.40f, 0.20f);
+                    bar(0.33f, 0.48f, 0.50f, 0.84f, 0.09f);
+                    bar(0.67f, 0.48f, 0.50f, 0.84f, 0.09f);
+                    break;
+
+                // Arcane Ward: a hexagon of force round a spark.
+                case Glyph.Ward:
+                    for (int i = 0; i < 6; ++i)
+                    {
+                        float a0 = Mathf.PI / 6f + i * Mathf.PI / 3f;
+                        float a1 = a0 + Mathf.PI / 3f;
+                        bar(0.50f + Mathf.Cos(a0) * 0.34f, 0.50f + Mathf.Sin(a0) * 0.34f,
+                            0.50f + Mathf.Cos(a1) * 0.34f, 0.50f + Mathf.Sin(a1) * 0.34f, 0.08f);
+                    }
+                    disc(0.50f, 0.50f, 0.09f);
                     break;
             }
             return shapes;
@@ -1626,6 +2376,47 @@ namespace MultiplayerARPG.Demo.EditorTools
             var created = ScriptableObject.CreateInstance<T>();
             AssetDatabase.CreateAsset(created, path);
             return created;
+        }
+
+        /// <summary>
+        /// Puts a plain skill asset on <see cref="MultiplayerARPG.SwingScaledWeaponSkill"/> when it
+        /// should be a weapon skill, and back on the kit's <see cref="Skill"/> when it should not,
+        /// by swapping `m_Script` in place. **Swapping a ScriptableObject's script destroys the
+        /// managed object**, so the asset is reloaded by path and the caller must use what this
+        /// returns - the same trap as DemoDatabaseWiring.WriteGameplayRule.
+        /// </summary>
+        private static BaseSkill EnsureSkillClass(string path, BaseSkill skill, bool weaponSkill)
+        {
+            bool isDemo = skill is MultiplayerARPG.SwingScaledWeaponSkill;
+            if (isDemo == weaponSkill)
+                return skill;
+            MonoScript script;
+            if (weaponSkill)
+            {
+                script = DemoScriptAssets.Of(typeof(MultiplayerARPG.SwingScaledWeaponSkill));
+            }
+            else
+            {
+                var plain = ScriptableObject.CreateInstance<Skill>();
+                script = MonoScript.FromScriptableObject(plain);
+                Object.DestroyImmediate(plain);
+            }
+            if (script == null)
+            {
+                Debug.LogError($"[{nameof(DemoSkillBuilder)}] {path} keeps its class: the script for " +
+                               (weaponSkill ? "SwingScaledWeaponSkill" : "Skill") + " could not be found.");
+                return skill;
+            }
+            var serialized = new SerializedObject(skill);
+            serialized.FindProperty("m_Script").objectReferenceValue = script;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+            var reloaded = AssetDatabase.LoadAssetAtPath<BaseSkill>(path);
+            if (reloaded == null || (reloaded is MultiplayerARPG.SwingScaledWeaponSkill) != weaponSkill)
+            {
+                Debug.LogError($"[{nameof(DemoSkillBuilder)}] Swapping {path}'s skill class did not take.");
+                return reloaded != null ? reloaded : skill;
+            }
+            return reloaded;
         }
     }
 }

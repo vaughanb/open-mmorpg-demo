@@ -69,17 +69,19 @@ namespace MultiplayerARPG.Demo.EditorTools
         };
 
         /// <summary>
-        /// The two buttons that floated under the minimap, and where they belong instead.
+        /// The two buttons that floated under the minimap, and where they belong instead, with the
+        /// label each shows there (null keeps the kit's).
         ///
         /// They are the only HUD controls the kit puts outside the menu bar, which left the
         /// top-right corner with a minimap and two unrelated buttons stuck to it. Moved into the
         /// bar they read as what they are - two more places to go - and the corner becomes the
-        /// minimap alone, which is the WoW arrangement.
+        /// minimap alone, which is the WoW arrangement. "Craft" rather than the kit's "Crafting"
+        /// (user, 2026-10-06): it is the one label in the row that did not fit a slot.
         /// </summary>
-        private static readonly string[] IntoMenuBar =
+        private static readonly (string Path, string Label)[] IntoMenuBar =
         {
-            "UICraftingLayout/ButtonCrafting",
-            "UIMailLayout/ButtonMail",
+            ("UICraftingLayout/ButtonCrafting", "Craft"),
+            ("UIMailLayout/ButtonMail", null),
         };
 
         [MenuItem("Open MMORPG/Demo/Build HUD")]
@@ -109,6 +111,8 @@ namespace MultiplayerARPG.Demo.EditorTools
                 PrefabUtility.UnloadPrefabContents(canvas);
             }
 
+            AddQuestTaskToast();
+            WireClassPowerBars();
             int attributes = SyncAttributeRows();
             int painted = Repaint();
             if (attributes > 0)
@@ -119,6 +123,191 @@ namespace MultiplayerARPG.Demo.EditorTools
             Debug.Log($"[{nameof(DemoHudBuilder)}] Repainted {painted} in-game prefabs onto the demo palette. " +
                       "This wrote prefabs only - DemoMap is untouched; the minimap's ground plane is " +
                       "\"Build Minimap Ground\", which is separate because it re-saves the map scene.");
+        }
+
+        /// <summary>
+        /// Every MP bar the demo shows, as (prefab, path to the kit UI that owns it, path to its fill,
+        /// path to its label or null). Paths are from the prefab root. The HUD frame is the local
+        /// player's and also rewords the kit's skill-cost and out-of-power strings.
+        /// </summary>
+        private static readonly (string Prefab, string Source, string Fill, string Label, bool Local)[] PowerBars =
+        {
+            (CanvasPath, "UIGenericLayout", "UIGenericLayout/UICharacterHpMp/MpGageBG/MpGage",
+                "UIGenericLayout/UICharacterHpMp/LabelMp", true),
+            (CanvasPath, "UIDialogs_Standalone/UICharacterDialog", null,
+                "UIDialogs_Standalone/UICharacterDialog/Window/Info/Stats/StatsMpBG/TextLabel", false),
+            (PrefabRoot + "/Party/UIPartyMember.prefab", "", "Layout/MpGageBG/MpGage", null, false),
+            (PrefabRoot + "/Party/UIPartyMember-Tiny.prefab", "", "Layout/MpGageBG/MpGage", null, false),
+        };
+
+        /// <summary>
+        /// Puts a <see cref="ClassPowerBar"/> on every MP bar in <see cref="PowerBars"/>, so a warrior's
+        /// reads as red rage and a ranger's as orange focus (see <see cref="ClassPower"/>). Idempotent:
+        /// an existing one is re-pointed, not doubled. Also run by Build HUD.
+        /// </summary>
+        [MenuItem("Open MMORPG/Demo/Wire Class Power Bars")]
+        public static void WireClassPowerBars()
+        {
+            int wired = 0;
+            foreach (string prefabPath in new HashSet<string>(System.Array.ConvertAll(PowerBars, b => b.Prefab)))
+            {
+                GameObject root = PrefabUtility.LoadPrefabContents(prefabPath);
+                try
+                {
+                    foreach (var bar in PowerBars)
+                    {
+                        if (bar.Prefab != prefabPath)
+                            continue;
+                        Transform sourceObject = bar.Source.Length == 0 ? root.transform : root.transform.Find(bar.Source);
+                        // Not `??`: in the editor a missing GetComponent is Unity's fake null, which `??` keeps.
+                        MonoBehaviour source = null;
+                        if (sourceObject != null)
+                        {
+                            source = sourceObject.GetComponent<UICharacter>();
+                            if (source == null)
+                                source = sourceObject.GetComponent<UISocialCharacter>();
+                        }
+                        if (source == null)
+                        {
+                            Debug.LogWarning($"[{nameof(DemoHudBuilder)}] No UICharacter or UISocialCharacter at '{bar.Source}' in {prefabPath}; its MP bar keeps the kit's look.");
+                            continue;
+                        }
+                        Graphic fill = bar.Fill == null ? null : root.transform.Find(bar.Fill)?.GetComponent<Graphic>();
+                        Text label = bar.Label == null ? null : root.transform.Find(bar.Label)?.GetComponent<Text>();
+                        if ((bar.Fill != null && fill == null) || (bar.Label != null && label == null))
+                            Debug.LogWarning($"[{nameof(DemoHudBuilder)}] Part of the MP bar under '{bar.Source}' in {prefabPath} is missing (fill {bar.Fill}, label {bar.Label}).");
+
+                        var power = sourceObject.gameObject.GetComponent<ClassPowerBar>();
+                        if (power == null)
+                            power = sourceObject.gameObject.AddComponent<ClassPowerBar>();
+                        power.source = source;
+                        power.fill = fill;
+                        power.label = label;
+                        power.isLocalPlayer = bar.Local;
+                        ++wired;
+                    }
+                    if (prefabPath == CanvasPath)
+                        FitPlayerFrameLabels(root);
+                    PrefabUtility.SaveAsPrefabAsset(root, prefabPath);
+                }
+                finally
+                {
+                    PrefabUtility.UnloadPrefabContents(root);
+                }
+            }
+            Debug.Log($"[{nameof(DemoHudBuilder)}] Class power bars wired on {wired} of {PowerBars.Length} MP bars.");
+        }
+
+        private const string PlayerFramePath = "UIGenericLayout/UICharacterHpMp";
+        private const string SummonsPath = "UIGenericLayout/UISummons";
+        private static readonly string[] PlayerFrameLabels = { "LabelHp", "LabelMp", "LabelStamina" };
+        private static readonly string[] PlayerFrameBars = { "HpGageBG", "MpGageBG", "StaminaGageBG" };
+
+        /// <summary>Space between the longest label and the bars, and between the frame and the summons beside it.</summary>
+        private const float PlayerFrameGap = 4f;
+        private const float SummonsGap = 5f;
+
+        /// <summary>
+        /// Makes the player frame's label column wide enough for every word it can show.
+        ///
+        /// The kit lays the frame out for "HP", "MP" and "STA": labels at x 5, bars from x 30, a
+        /// 25-pixel column. "RAGE" (29 px at the frame's size 10) and "FOCUS" (35) ran under the bars
+        /// (user's screenshot, 2026-10-06). This measures every label's text and the
+        /// <see cref="ClassPowerBar"/>'s rage and focus words in the label's own font, starts the bars
+        /// just past the widest, and widens the frame by the same amount so the bars keep their
+        /// length; the pet frames beside it (`UISummons`) move along with its right edge, level with
+        /// its top. Everything is set absolutely from the measurement, so running it twice changes nothing.
+        /// </summary>
+        private static void FitPlayerFrameLabels(GameObject canvas)
+        {
+            var frame = canvas.transform.Find(PlayerFramePath) as RectTransform;
+            if (frame == null)
+            {
+                Debug.LogWarning($"[{nameof(DemoHudBuilder)}] No {PlayerFramePath}; its labels keep the kit's column.");
+                return;
+            }
+
+            var words = new List<string>();
+            ClassPowerBar power = frame.parent != null ? frame.parent.GetComponent<ClassPowerBar>() : null;
+            if (power != null)
+            {
+                words.Add(power.rageLabel);
+                words.Add(power.focusLabel);
+            }
+
+            float labelLeft = 0f, widest = 0f;
+            foreach (string name in PlayerFrameLabels)
+            {
+                var label = frame.Find(name)?.GetComponent<Text>();
+                if (label == null)
+                    continue;
+                RectTransform rect = label.rectTransform;
+                labelLeft = Mathf.Max(labelLeft, rect.anchoredPosition.x);
+                string own = label.text;
+                bool caps = own == own.ToUpperInvariant();
+                foreach (string word in words)
+                {
+                    // ClassPowerBar matches the prefab label's case, so measure what it will show.
+                    label.text = caps ? word.ToUpperInvariant() : word;
+                    widest = Mathf.Max(widest, label.preferredWidth);
+                }
+                label.text = own;
+                widest = Mathf.Max(widest, label.preferredWidth);
+            }
+
+            float barsLeft = labelLeft + Mathf.Ceil(widest) + PlayerFrameGap;
+            float barWidth = 0f, barRight = 0f;
+            foreach (string name in PlayerFrameBars)
+            {
+                var bar = frame.Find(name) as RectTransform;
+                if (bar == null)
+                    continue;
+                barWidth = bar.rect.width;
+                barRight = -bar.offsetMax.x;
+                bar.offsetMin = new Vector2(barsLeft, bar.offsetMin.y);
+            }
+            if (barWidth <= 0f)
+                return;
+            frame.sizeDelta = new Vector2(barsLeft + barWidth + barRight, frame.sizeDelta.y);
+
+            // Level with the frame's top, not the screen's: the menu bar runs along the top edge and,
+            // with the crafting and mail buttons inside it (FoldIntoMenuBar), reaches past the frame -
+            // a pet frame left at the top would sit on those buttons.
+            var summons = canvas.transform.Find(SummonsPath) as RectTransform;
+            if (summons != null)
+                summons.anchoredPosition = new Vector2(frame.anchoredPosition.x + frame.sizeDelta.x + SummonsGap, frame.anchoredPosition.y);
+
+            Debug.Log($"[{nameof(DemoHudBuilder)}] Player frame: labels {Mathf.Ceil(widest)} px wide, bars from x {barsLeft}, frame {frame.sizeDelta.x} px.");
+        }
+
+        private const string MessageHandlerPath = PrefabRoot + "/GamePlay/Share/UIGameMessageHandler.prefab";
+
+        /// <summary>
+        /// Puts <see cref="UICustomQuestTaskToast"/> beside the kit's quest notifier, which raises no
+        /// pop-up for a custom quest task - and Thin the Camp's "any bandit" kill count is one.
+        /// Idempotent.
+        /// </summary>
+        public static void AddQuestTaskToast()
+        {
+            GameObject root = PrefabUtility.LoadPrefabContents(MessageHandlerPath);
+            try
+            {
+                var kit = root.GetComponentInChildren<UIQuestNotificationManager>(true);
+                if (kit == null)
+                {
+                    Debug.LogWarning($"[{nameof(DemoHudBuilder)}] No UIQuestNotificationManager in {MessageHandlerPath}; " +
+                                     "custom quest tasks will raise no pop-ups.");
+                    return;
+                }
+                if (kit.GetComponent<UICustomQuestTaskToast>() != null)
+                    return;
+                kit.gameObject.AddComponent<UICustomQuestTaskToast>();
+                PrefabUtility.SaveAsPrefabAsset(root, MessageHandlerPath);
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(root);
+            }
         }
 
         // ------------------------------------------------------------------
@@ -318,7 +507,7 @@ namespace MultiplayerARPG.Demo.EditorTools
 
         /// <summary>
         /// Points a tracker at the "nothing here" object the kit already toggles, so it can hide
-        /// itself. See <see cref="DemoTrackerPanel"/> for why that object rather than the party
+        /// itself. See <see cref="UIHideWhenEmpty"/> for why that object rather than the party
         /// and quest data behind it.
         /// </summary>
         private static bool AutoHide(GameObject target, Transform root, string emptyStatePath)
@@ -328,9 +517,9 @@ namespace MultiplayerARPG.Demo.EditorTools
                 return false;
             if (target.GetComponent<CanvasGroup>() == null)
                 target.AddComponent<CanvasGroup>();
-            var hider = target.GetComponent<DemoTrackerPanel>();
+            var hider = target.GetComponent<UIHideWhenEmpty>();
             if (hider == null)
-                hider = target.AddComponent<DemoTrackerPanel>();
+                hider = target.AddComponent<UIHideWhenEmpty>();
             hider.emptyState = empty.gameObject;
             return true;
         }
@@ -382,34 +571,70 @@ namespace MultiplayerARPG.Demo.EditorTools
                 return 0;
             }
             var barRect = (RectTransform)bar;
-            float x = barRect.anchoredPosition.x + barRect.sizeDelta.x + Gap;
-            // Take the bar's own width-per-button and label size rather than naming numbers here:
-            // these two only look like part of the row if they match whatever the row is.
-            float width = barRect.sizeDelta.x / Mathf.Max(1, bar.childCount);
+            var layout = bar.GetComponent<HorizontalLayoutGroup>();
             int labelSize = MenuLabelSize(bar);
 
-            int moved = 0;
-            foreach (string path in IntoMenuBar)
+            // The bar's own buttons: what its layout group places (its frame child ignores layout).
+            int own = 0;
+            foreach (Transform child in bar)
             {
-                Transform button = FindByPath(canvas.transform, path);
+                var element = child.GetComponent<LayoutElement>();
+                if (child.gameObject.activeSelf && (element == null || !element.ignoreLayout))
+                    ++own;
+            }
+            float padLeft = layout != null ? layout.padding.left : 0f;
+            float padRight = layout != null ? layout.padding.right : 0f;
+            float padTop = layout != null ? layout.padding.top : 0f;
+            float padBottom = layout != null ? layout.padding.bottom : 0f;
+            float spacing = layout != null ? layout.spacing : Gap;
+            // The bar's end padding is its start padding: the right side is what grows below.
+            float padEnd = padLeft;
+
+            // The slot the layout gives each of its own buttons, to a whole pixel so the padding (an
+            // int) and the width agree exactly - which is also what makes a second run measure the
+            // same slot and change nothing.
+            float slot = Mathf.Floor((barRect.sizeDelta.x - padLeft - padRight - spacing * (own - 1)) / Mathf.Max(1, own));
+            var buttons = new List<(RectTransform Rect, string Label)>();
+            foreach (var entry in IntoMenuBar)
+            {
+                Transform button = FindByPath(canvas.transform, entry.Path);
                 if (button == null)
-                {
-                    Debug.LogWarning($"[{nameof(DemoHudBuilder)}] Nothing at \"{path}\" to move.");
-                    continue;
-                }
-                var rect = (RectTransform)button;
+                    Debug.LogWarning($"[{nameof(DemoHudBuilder)}] Nothing at \"{entry.Path}\" to move.");
+                else
+                    buttons.Add(((RectTransform)button, entry.Label));
+            }
+
+            // They live under other HUD prefabs (crafting, mail), so they cannot become children of
+            // the bar's layout. Instead the bar keeps room for them at its end - the right padding
+            // grows by their slots and the bar by the same - and they are laid over that room at the
+            // size its own buttons get. They draw after the bar, so they sit on it.
+            float reserved = buttons.Count * (slot + spacing);
+            if (layout != null)
+                layout.padding.right = Mathf.RoundToInt(padEnd + reserved);
+            barRect.sizeDelta = new Vector2(padLeft + own * slot + (own - 1) * spacing + reserved + padEnd, barRect.sizeDelta.y);
+
+            float x = barRect.anchoredPosition.x + padLeft + own * (slot + spacing);
+            float height = barRect.sizeDelta.y - padTop - padBottom;
+            int moved = 0;
+            foreach (var (rect, newLabel) in buttons)
+            {
                 rect.anchorMin = new Vector2(0f, 1f);
                 rect.anchorMax = new Vector2(0f, 1f);
                 rect.pivot = new Vector2(0f, 1f);
-                rect.sizeDelta = new Vector2(width, barRect.sizeDelta.y);
-                rect.anchoredPosition = new Vector2(x, barRect.anchoredPosition.y);
-                x += width + Gap;
+                rect.sizeDelta = new Vector2(slot, height);
+                rect.anchoredPosition = new Vector2(x, barRect.anchoredPosition.y - padTop);
+                x += slot + spacing;
+                // The button's own label is the first Text under it; the mail button's unread count
+                // is a second one and keeps its words.
+                Text label = rect.GetComponentInChildren<Text>(true);
+                if (label != null && newLabel != null)
+                    label.text = newLabel;
                 // They shipped at 14pt against the bar's 9, which at twice the width read as two
                 // different pieces of UI sitting next to each other rather than one row.
                 if (labelSize > 0)
                 {
-                    foreach (Text label in button.GetComponentsInChildren<Text>(true))
-                        label.fontSize = labelSize;
+                    foreach (Text text in rect.GetComponentsInChildren<Text>(true))
+                        text.fontSize = labelSize;
                 }
                 ++moved;
             }
@@ -456,7 +681,7 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// The template ships **BGM and SFX only**. The other two sliders in that dialog are mouse
         /// sensitivity - so the `Master` and `Ambient` settings existed on the `AudioManager`, were
         /// read every frame by everything that plays, and could not be changed by the player at
-        /// all. The island's ambience was the visible casualty: `DemoAmbientLoop` multiplies by the
+        /// all. The island's ambience was the visible casualty: `AmbientSoundLoop` multiplies by the
         /// **ambient** level, faithfully, and nothing could move it.
         ///
         /// Cloned from the Sfx row rather than built from parts, so the new rows inherit whatever

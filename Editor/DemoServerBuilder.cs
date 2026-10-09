@@ -87,7 +87,9 @@ namespace MultiplayerARPG.Demo.EditorTools
             {
                 EditorUserBuildSettings.standaloneBuildSubtarget = StandaloneBuildSubtarget.Player;
                 Debug.Log($"[{nameof(DemoServerBuilder)}] Editor put back on the Player subtarget; the " +
-                          "project recompiles without UNITY_SERVER.");
+                          "project recompiles without UNITY_SERVER. (TerrainShaderRepair, in Demo/Editor, then reimports " +
+                          "URP's far-terrain shader, which the server build leaves stubbed - without that the " +
+                          "island goes magenta past 220 m.)");
             }
 
             BuildSummary summary = report.summary;
@@ -101,6 +103,63 @@ namespace MultiplayerARPG.Demo.EditorTools
             {
                 Debug.LogError($"[{nameof(DemoServerBuilder)}] Build {summary.result} with {summary.totalErrors} error(s).");
             }
+        }
+
+        /// <summary>Where the second client goes: beside the server build, never over it.</summary>
+        private const string ClientOutputDir = "builds_client";
+
+        /// <summary>
+        /// A second player for testing what needs two - trading, mail, player shops, duels,
+        /// friends, parties, the guild bank, PvP. Press Play in 00Init for the servers and the
+        /// first client, then start this build for the second; both log in to 127.0.0.1.
+        ///
+        /// A player build with no arguments starts no servers
+        /// (`MMOServerInstance` only reads the editor's start-on-awake flags inside the
+        /// editor), so this is a client and nothing else, however 00Init is set up.
+        ///
+        /// Its own folder, because `builds/` is the map server the spawner launches, and a client
+        /// build written over it would leave the map spawner starting a client with a renderer.
+        /// A full player, so it compiles the URP shaders - long the first time, cached after.
+        /// </summary>
+        [MenuItem("Open MMORPG/Demo/Build Test Client (second player)", priority = 101)]
+        public static void BuildTestClient()
+        {
+            string[] scenes = ScenesInBuild();
+            if (scenes.Length == 0)
+            {
+                Debug.LogError($"[{nameof(DemoServerBuilder)}] No scenes enabled in the build settings.");
+                return;
+            }
+            string root = Directory.GetParent(Application.dataPath).FullName;
+            string output = Path.Combine(root, ClientOutputDir, OutputName);
+            Directory.CreateDirectory(Path.GetDirectoryName(output));
+            Debug.Log($"[{nameof(DemoServerBuilder)}] Building a test client to {output}.");
+
+            var options = new BuildPlayerOptions
+            {
+                scenes = scenes,
+                locationPathName = output,
+                target = BuildTarget.StandaloneWindows64,
+                targetGroup = BuildTargetGroup.Standalone,
+                options = BuildOptions.Development,
+                subtarget = (int)StandaloneBuildSubtarget.Player,
+            };
+            BuildSummary summary = BuildPipeline.BuildPlayer(options).summary;
+            if (summary.result == BuildResult.Succeeded)
+            {
+                Debug.Log($"[{nameof(DemoServerBuilder)}] Built the test client {output} " +
+                          $"({summary.totalSize / (1024 * 1024)} MB in {summary.totalTime.TotalSeconds:F0}s).");
+            }
+            else
+            {
+                Debug.LogError($"[{nameof(DemoServerBuilder)}] Test client build {summary.result} with {summary.totalErrors} error(s).");
+            }
+        }
+
+        [MenuItem("Open MMORPG/Demo/Build Test Client (second player)", validate = true)]
+        public static bool CanBuildTestClient()
+        {
+            return !EditorApplication.isPlayingOrWillChangePlaymode;
         }
 
         /// <summary>

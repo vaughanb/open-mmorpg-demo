@@ -383,7 +383,7 @@ namespace MultiplayerARPG.Demo.EditorTools
         /// plays across the lot without restarting as the player moves between them, which
         /// is the whole point of putting it in the scene rather than on a screen.
         ///
-        /// It follows the BGM setting through <see cref="MultiplayerARPG.Demo.DemoMusicPlayer"/>;
+        /// It follows the BGM setting through <see cref="MultiplayerARPG.MusicPlayer"/>;
         /// the source is left silent in the scene file so that a build with the music turned
         /// down does not open at full volume for a frame.
         /// </summary>
@@ -398,9 +398,9 @@ namespace MultiplayerARPG.Demo.EditorTools
             source.playOnAwake = false;
             source.spatialBlend = 0f;
             source.volume = 0f;
-            var music = go.AddComponent<MultiplayerARPG.Demo.DemoMusicPlayer>();
+            var music = go.AddComponent<MultiplayerARPG.MusicPlayer>();
             music.tracks = tracks;
-            music.mode = MultiplayerARPG.Demo.DemoMusicPlayer.PlayMode.Continuous;
+            music.mode = MultiplayerARPG.MusicPlayer.PlayMode.Continuous;
             music.volume = DemoAudioWiring.MenuMusicVolume;
             return true;
         }
@@ -1585,7 +1585,7 @@ namespace MultiplayerARPG.Demo.EditorTools
             {
                 return;
             }
-            instance.AddComponent<DemoWindSway>().Configure(WindYaw, degrees, period, swell, swellPeriod);
+            instance.AddComponent<WindSway>().Configure(WindYaw, degrees, period, swell, swellPeriod);
         }
 
         private static void Ignite(GameObject brazier)

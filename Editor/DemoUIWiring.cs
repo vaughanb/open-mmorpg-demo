@@ -61,7 +61,7 @@ namespace MultiplayerARPG.Demo.EditorTools
         public static void Wire()
         {
             Sprite gage = EnsureGageSprite();
-            int gauges = 0, slots = 0, texts = 0, rows = 0, hidden = 0, prefabs = 0;
+            int gauges = 0, slots = 0, texts = 0, rows = 0, hidden = 0, shops = 0, expiries = 0, ammo = 0, prefabs = 0;
 
             foreach (string guid in AssetDatabase.FindAssets("t:Prefab", new[] { PrefabRoot }))
             {
@@ -75,6 +75,9 @@ namespace MultiplayerARPG.Demo.EditorTools
                     dirty |= WireCombatText(root, ref texts);
                     dirty |= PruneDeadDataRows(root, ref rows);
                     dirty |= HideDeadGameDataRows(root, ref hidden);
+                    dirty |= WireShopPrices(root, ref shops);
+                    dirty |= HideLatchedExpiry(root, ref expiries);
+                    dirty |= RefreshAmmoCounters(root, ref ammo);
                     if (dirty)
                     {
                         PrefabUtility.SaveAsPrefabAsset(root, path);
@@ -90,7 +93,103 @@ namespace MultiplayerARPG.Demo.EditorTools
             AssetDatabase.SaveAssets();
             Debug.Log($"[{nameof(DemoUIWiring)}] Wired {prefabs} prefabs: {gauges} gauge images given a sprite, " +
                       $"{slots} equipment slots given an armour type, {texts} combat texts assigned, " +
-                      $"{rows} dead data rows dropped, {hidden} rows hidden for want of game data.");
+                      $"{rows} dead data rows dropped, {hidden} rows hidden for want of game data, " +
+                      $"{shops} shop entries given a price label, {expiries} expiry lines hidden, " +
+                      $"{ammo} ammo counters given a refresher.");
+        }
+
+        /// <summary>What a shop shows beside an item: "40 gold".</summary>
+        private const string ShopPriceFormat = "{0} gold";
+
+        /// <summary>
+        /// Makes a shop's list say what things cost (user report, 2026-09-25: "you have to click
+        /// on them to open up the full modal showing the price").
+        ///
+        /// The list entry always had a gold line - `UINpcSellItem.uiTextSellPrice` - but it
+        /// hides itself at zero, and every demo shop charged zero (DemoNpcBuilder.SetSellItems,
+        /// fixed the same day). What showed instead was **"Fame: 0"**, a text the template left
+        /// with a placeholder and wired to nothing: the demo has no custom currencies, so it
+        /// could never change. It is switched off, not deleted, so it is one toggle back if the
+        /// demo ever sells for a currency.
+        ///
+        /// The kit labels the gold line with `UI_FORMAT_SELL_PRICE`, "Sell Price: {0}" - the
+        /// right words on an item in the player's bag, the wrong ones in a shop the player is
+        /// buying from. The entry's own format setting takes a custom value, so it reads
+        /// "40 gold" with no change to the kit's text table.
+        /// </summary>
+        private static bool WireShopPrices(GameObject root, ref int count)
+        {
+            bool dirty = false;
+            foreach (UINpcSellItem entry in root.GetComponentsInChildren<UINpcSellItem>(true))
+            {
+                if (!entry.formatKeySellPrice.useCustomValue || entry.formatKeySellPrice.customValue != ShopPriceFormat)
+                {
+                    var serialized = new SerializedObject(entry);
+                    serialized.FindProperty("formatKeySellPrice.useCustomValue").boolValue = true;
+                    serialized.FindProperty("formatKeySellPrice.customValue").stringValue = ShopPriceFormat;
+                    serialized.ApplyModifiedPropertiesWithoutUndo();
+                    ++count;
+                    dirty = true;
+                }
+                foreach (Text text in entry.GetComponentsInChildren<Text>(true))
+                {
+                    if (text.name != "TextCashSellPrice" || !text.gameObject.activeSelf)
+                        continue;
+                    text.gameObject.SetActive(false);
+                    EditorUtility.SetDirty(text.gameObject);
+                    dirty = true;
+                }
+            }
+            return dirty;
+        }
+
+        /// <summary>
+        /// Ships every item window's "Expires in" line switched off.
+        ///
+        /// `UICharacterItem` shows the line for an item that expires, and hides it again only
+        /// if it showed it before (`_lastExpireVisible` starts false and guards the hide). So
+        /// on an item that never expires - every item in the demo - the line is never touched,
+        /// and whatever the prefab says stays up: the template's placeholder, "Expires in:
+        /// 1 Hour", on a Foundation Kit in the carpenter's shop (user report, 2026-09-25). A
+        /// Core bug; switched off here, the kit turns it on the moment it has something to say.
+        /// </summary>
+        private static bool HideLatchedExpiry(GameObject root, ref int count)
+        {
+            bool dirty = false;
+            foreach (UICharacterItem item in root.GetComponentsInChildren<UICharacterItem>(true))
+            {
+                if (item.uiTextExpireTime == null || !item.uiTextExpireTime.gameObject.activeSelf)
+                    continue;
+                item.uiTextExpireTime.gameObject.SetActive(false);
+                EditorUtility.SetDirty(item.uiTextExpireTime.gameObject);
+                ++count;
+                dirty = true;
+            }
+            return dirty;
+        }
+
+        /// <summary>
+        /// Puts a <see cref="MultiplayerARPG.UIAmmoAmountRefresh"/> beside every arrow
+        /// counter. The kit's counter froze at whatever it read when the HUD was enabled - 100 in
+        /// the harness while the pack held 27 - so it showed arrows the character no longer had
+        /// (user report, 2026-10-02). A Core bug; see the component.
+        /// </summary>
+        private static bool RefreshAmmoCounters(GameObject root, ref int count)
+        {
+            bool dirty = false;
+            foreach (UIAmmoAmount counter in root.GetComponentsInChildren<UIAmmoAmount>(true))
+            {
+                // The HUD holds the counter as a nested prefab, and the counter's own prefab is
+                // wired on its own pass. Adding it here as well gave the HUD two.
+                if (PrefabUtility.IsPartOfPrefabInstance(counter))
+                    continue;
+                if (counter.GetComponent<MultiplayerARPG.UIAmmoAmountRefresh>() != null)
+                    continue;
+                counter.gameObject.AddComponent<MultiplayerARPG.UIAmmoAmountRefresh>();
+                ++count;
+                dirty = true;
+            }
+            return dirty;
         }
 
         /// <summary>
