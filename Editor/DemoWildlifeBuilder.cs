@@ -593,6 +593,9 @@ namespace MultiplayerARPG.Demo.EditorTools
             patrol.walkSpeed = 0.3f;
             patrol.pause = 4f;
             patrol.holdForPlayersWithin = 0f;   // it has nothing to say, so it never stops to talk
+            // Every NPC turns to whoever talks to them; the dog's one, like the people's, only
+            // steers while it is standing, so a walk is never interrupted (see the component).
+            entity.AddComponent<NpcFaceSpeaker>();
 
             Save(entity, $"{EntityDir}/DemoVillageDog.prefab");
         }

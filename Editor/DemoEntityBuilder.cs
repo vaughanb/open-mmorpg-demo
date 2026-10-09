@@ -258,6 +258,8 @@ namespace MultiplayerARPG.Demo.EditorTools
                 agent.stoppingDistance = 0.3f;
                 entity.AddComponent<MultiplayerARPG.NpcPatrol>();
             }
+            // Turns to face whoever talks to them, and back again after (see the component).
+            entity.AddComponent<MultiplayerARPG.NpcFaceSpeaker>();
             DemoAudioWiring.WireCharacter(entity, modelPath.Contains("Female"));
 
             PrefabUtility.SaveAsPrefabAsset(entity, outputPath);
