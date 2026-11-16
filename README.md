@@ -346,6 +346,11 @@ depends on whether that character can charge a shot).
 built (see below); `Build Character Models` applies them itself.
 `Open MMORPG > Demo > Build Weapon Sheathing` is the same bargain for the draw and sheathe
 (see below).
+`Open MMORPG > Demo > Refresh Root Motion` puts root motion right on the entities already
+built: a player's Animator goes from its model up to the entity, where the kit's movement
+applies root motion (Unity sends `OnAnimatorMove` only to the Animator's own object), and
+every monster's model gets `NavMeshRootMotion`, because the kit's navmesh movement has none.
+`Build Character Entities` and `Build Wildlife` do both themselves.
 
 **Action animations are masked so they do not override the legs** (2026-10-03). A kit action
 state with no avatar mask plays on every bone, so the legs and hips of a pickup or a hit
