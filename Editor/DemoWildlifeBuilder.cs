@@ -633,6 +633,8 @@ namespace MultiplayerARPG.Demo.EditorTools
             modelInstance.transform.SetParent(entity.transform, false);
             modelInstance.name = "Model";
             entity.GetComponent<CharacterModelManager>().MainTpsModel = modelInstance.GetComponent<PlayableCharacterModel>();
+            // As every monster has: the kit's navmesh movement has no root motion of its own.
+            DemoEntityBuilder.GiveRootMotion(modelInstance);
 
             CharacterController controller = entity.GetComponent<CharacterController>();
             if (controller != null)

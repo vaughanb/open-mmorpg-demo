@@ -17,7 +17,9 @@ namespace MultiplayerARPG.Demo.EditorTools
     ///
     /// The model is left as a child rather than merged into the entity root, so a
     /// character can switch between the male and female model without the entity
-    /// being rebuilt. CharacterModelManager.MainTpsModel points at it.
+    /// being rebuilt. CharacterModelManager.MainTpsModel points at it. A player's
+    /// Animator alone goes up to the entity, for the kit's root motion - see
+    /// <see cref="PutAnimatorOnEntity"/>.
     /// </summary>
     public static class DemoEntityBuilder
     {
@@ -761,6 +763,147 @@ namespace MultiplayerARPG.Demo.EditorTools
                                  "SkinnedMeshRenderer.");
         }
 
+        /// <summary>
+        /// Moves a player's Animator from its model up to the entity, so the kit's root motion
+        /// works.
+        ///
+        /// The kit applies root motion from `OnAnimatorMove` on the entity's
+        /// `CharacterControllerEntityMovement`, and Unity sends that message only to the
+        /// Animator's own object. With the Animator on the `Model` child the message never
+        /// arrived: root motion did nothing at all, and turning one of the movement's root motion
+        /// flags on froze the character, because the movement then zeroes its own velocity and
+        /// waits for motion that never comes (reported 2026-11-16). The kit's own entities keep
+        /// the Animator on the entity, which is the arrangement its code was written for, so the
+        /// player goes back to it rather than the kit being changed.
+        ///
+        /// The skeleton stays under `Model` and animates exactly as before: every humanoid bone
+        /// lands in the same place with the Animator one level up, at the size slider's scales as
+        /// well (measured, 0.1 mm). The model component is pointed at the entity's Animator,
+        /// and the demo's scripts that want it ask `ModelAnimator.Of`.
+        ///
+        /// Players only. A monster moves on the navmesh, whose movement has no root motion to
+        /// hook into - see <see cref="GiveRootMotion"/> - and the rider's seated copy keeps its
+        /// own Animator. Safe to repeat. Returns whether anything changed.
+        /// </summary>
+        internal static bool PutAnimatorOnEntity(GameObject entity, GameObject modelInstance)
+        {
+            var model = modelInstance.GetComponent<PlayableCharacterModel>();
+            if (model == null)
+            {
+                Debug.LogError($"[{nameof(DemoEntityBuilder)}] {entity.name}'s model has no PlayableCharacterModel, " +
+                               "so its Animator was left where it is.");
+                return false;
+            }
+
+            Animator onModel = modelInstance.GetComponent<Animator>();
+            Animator onEntity = entity.GetComponent<Animator>();
+            if (onModel == null)
+            {
+                // Already moved.
+                if (onEntity == null)
+                    Debug.LogError($"[{nameof(DemoEntityBuilder)}] {entity.name} has no Animator on its model or on itself.");
+                else if (model.animator != onEntity)
+                    PointModelAt(model, onEntity);
+                else
+                    return false;
+                return onEntity != null;
+            }
+
+            if (onEntity == null)
+                onEntity = entity.AddComponent<Animator>();
+            onEntity.avatar = onModel.avatar;
+            onEntity.runtimeAnimatorController = onModel.runtimeAnimatorController;
+            onEntity.cullingMode = onModel.cullingMode;
+            onEntity.updateMode = onModel.updateMode;
+            // The movement component decides, clip by clip; see its root motion settings.
+            onEntity.applyRootMotion = false;
+            PointModelAt(model, onEntity);
+            Object.DestroyImmediate(onModel, true);
+            if (modelInstance.GetComponent<Animator>() != null)
+            {
+                Debug.LogError($"[{nameof(DemoEntityBuilder)}] Could not take the Animator off {entity.name}'s model " +
+                               "(does another component there require one?). Two Animators would drive one skeleton.");
+                return false;
+            }
+            return true;
+        }
+
+        private static void PointModelAt(PlayableCharacterModel model, Animator animator)
+        {
+            var serialized = new SerializedObject(model);
+            serialized.FindProperty("animator").objectReferenceValue = animator;
+            serialized.ApplyModifiedPropertiesWithoutUndo();
+        }
+
+        /// <summary>
+        /// Gives a monster's model the demo's root motion for navmesh movement. The kit's
+        /// `NavMeshEntityMovement` has none, so an attack or skill animation with
+        /// `shouldUseRootMotion` ticked played on the spot; `NavMeshRootMotion` (in the demo's
+        /// scripts) does it beside the Animator, where Unity sends `OnAnimatorMove`. Safe to
+        /// repeat. Returns whether it was added.
+        /// </summary>
+        internal static bool GiveRootMotion(GameObject modelInstance)
+        {
+            if (modelInstance == null || modelInstance.GetComponent<Animator>() == null ||
+                modelInstance.GetComponent<NavMeshRootMotion>() != null)
+                return false;
+            modelInstance.AddComponent<NavMeshRootMotion>();
+            return true;
+        }
+
+        /// <summary>
+        /// Puts root motion right on the entities already built, and touches nothing else - so
+        /// the whole entity chain (which rebuilds the player bodies and wants `Wire Game
+        /// Database` after) need not be run for it. The players' Animator goes up to the entity
+        /// (<see cref="PutAnimatorOnEntity"/>) and every monster gets `NavMeshRootMotion`
+        /// (<see cref="GiveRootMotion"/>); both are what a full build does. Safe to repeat.
+        /// </summary>
+        [MenuItem("Open MMORPG/Demo/Refresh Root Motion")]
+        public static void RefreshRootMotion()
+        {
+            int players = 0;
+            int monsters = 0;
+            foreach (string guid in AssetDatabase.FindAssets("t:Prefab", new[] { EntityDir }))
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guid);
+                if (IsTemplate(path))
+                    continue;
+                var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(path);
+                if (prefab == null)
+                    continue;
+                bool isPlayer = prefab.GetComponent<BasePlayerCharacterEntity>() != null;
+                bool isMonster = prefab.GetComponent<BaseMonsterCharacterEntity>() != null &&
+                                 prefab.GetComponent<NavMeshEntityMovement>() != null;
+                if (!isPlayer && !isMonster)
+                    continue;
+
+                GameObject root = PrefabUtility.LoadPrefabContents(path);
+                bool changed = false;
+                try
+                {
+                    Transform model = root.transform.Find("Model");
+                    if (model == null)
+                        continue;
+                    changed = isPlayer ? PutAnimatorOnEntity(root, model.gameObject) : GiveRootMotion(model.gameObject);
+                    if (changed)
+                        PrefabUtility.SaveAsPrefabAsset(root, path);
+                }
+                finally
+                {
+                    PrefabUtility.UnloadPrefabContents(root);
+                }
+                if (!changed)
+                    continue;
+                AssetDatabase.ImportAsset(path, ImportAssetOptions.ForceUpdate);
+                if (isPlayer)
+                    ++players;
+                else
+                    ++monsters;
+            }
+            Debug.Log($"[{nameof(DemoEntityBuilder)}] Root motion: moved the Animator to the entity on {players} " +
+                      $"player prefab(s) and gave {monsters} monster prefab(s) NavMeshRootMotion.");
+        }
+
         /// <summary>The transform a character model equips a socket's items under.</summary>
         private static Transform Socket(GameObject modelInstance, string socket)
         {
@@ -1041,6 +1184,14 @@ namespace MultiplayerARPG.Demo.EditorTools
             FitColliders(entity);
             PlaceAnchors(entity);
             DemoAudioWiring.WireCharacter(entity, modelPath.Contains("Female"));
+
+            // Root motion, last so that nothing above is looking for the Animator on the model:
+            // a player's goes up to the entity, where the kit's movement applies it; a monster
+            // moves on the navmesh, which has none, so its model carries the demo's.
+            if (monsterData == null)
+                PutAnimatorOnEntity(entity, modelInstance);
+            else
+                GiveRootMotion(modelInstance);
 
             PrefabUtility.SaveAsPrefabAsset(entity, outputPath);
             GiveOwnNetworkId(outputPath);
